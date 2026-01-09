@@ -4,13 +4,9 @@ Convert 2D videos and photos into interactive 3D scenes using ML-SHARP and Rerun
 
 ## Demo Video
 
-<video width="100%" controls>
-  <source src="docs/assets/demo_video.mov" type="video/quicktime">
-  <source src="docs/assets/demo_video.mov" type="video/mp4">
-  Your browser does not support the video tag. [Download the video](docs/assets/demo_video.mov) to view it.
-</video>
+![Demo Video Preview](docs/assets/demo_preview.gif)
 
-[Direct video link](docs/assets/demo_video.mov)
+**[Click here to download the full demo video](docs/assets/demo_video.mov)** | [View thumbnail](docs/assets/demo_thumbnail.jpg)
 
 ---
 
