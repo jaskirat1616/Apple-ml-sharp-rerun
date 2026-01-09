@@ -45,8 +45,9 @@ output_test/
 *.mov
 *.avi
 
-# Exception: Demo video for README
+# Exception: Demo video and thumbnail for README
 !docs/assets/demo_video.mov
+!docs/assets/demo_thumbnail.jpg
 
 # JSON outputs
 *.json
