@@ -1,4 +1,4 @@
-# Apple ML-SHARP Rerun Visualization Tools
+# Apple ML-SHARP Rerun
 
 Convert 2D videos and photos into interactive 3D scenes using ML-SHARP and Rerun. Explore your videos in 3D space with depth maps, navigation tools, and creative effects.
 
