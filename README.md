@@ -78,9 +78,9 @@ python run_video_3d.py
 python run_video_3d.py solid
 ```
 
-**Point cloud mode** renders each frame's Gaussian splats as colored 3D points with adjustable size and brightness.
+**Point cloud mode** renders each frame's Gaussian splats as colored 3D points. Colors are converted from SHARP's internal linearRGB to sRGB for correct brightness.
 
-**Solid mesh mode** reconstructs a continuous triangle mesh from each frame's point cloud using voxel-based surface reconstruction (marching cubes), then projects the source video frame onto the mesh for accurate colors. Uses 768-voxel resolution (2.9M vertices per frame), bilinear color interpolation, and a 60/40 blend of source-image and point-cloud colors. The result is a solid, gap-free 3D surface with real video colors.
+**Solid mesh mode** reconstructs a continuous triangle mesh from each frame's point cloud using voxel-based surface reconstruction (marching cubes at 768-voxel resolution, 2.9M vertices per frame). Colors come from the original SHARP point cloud — no modification, no blending. The result is a solid, gap-free 3D surface with original colors.
 
 ### SLAM 3D Mapping (`run_slam_3d.py`)
 
@@ -138,6 +138,28 @@ python run_image_3d.py /path/to/photo.jpg --output-dir my_3d_output
 | 1536 | ~11M+ | ~22M+ | ~40s | ~8GB |
 
 At 1024 resolution, the mesh has 356K unique colors sampled from the source image via bilinear interpolation.
+
+### Splat Viewer (`run_splat_viewer.py`)
+
+View any PLY file as Gaussian splats in Rerun — works with both SHARP 3DGS format and simple point cloud PLYs:
+
+```bash
+# View a SHARP Gaussian splat PLY
+python run_splat_viewer.py output_grok_3d/gaussians/frame_000000.ply
+
+# View a simple point cloud PLY (red/green/blue properties)
+python run_splat_viewer.py output_frame_000000_3d/frame_000000_points.ply
+```
+
+**What it does:**
+- Loads the PLY file directly via `plyfile` (no SHARP dependency for viewing)
+- Supports two PLY formats:
+  - **SHARP 3DGS format** (`f_dc_0/1/2`, `opacity`, `scale_0/1/2`) — converts SH coefficients to sRGB colors, applies sigmoid to opacity, filters low-opacity points
+  - **Simple point cloud format** (`red/green/blue`) — uses colors directly
+- Computes splat radii from scale properties
+- Renders in Rerun with scale-based point sizes
+
+No CUDA required — runs on macOS (MPS/CPU). No web browser needed.
 
 ---
 
@@ -480,7 +502,13 @@ splatline/
 ├── examples/                   # Example scripts
 ├── tests/                      # Test scripts
 ├── configs/                    # Configuration files
-└── data/                       # Sample data
+├── data/                       # Sample data
+│
+├── run_video_3d.py             # ⭐ Video → 3D (point cloud or solid mesh)
+├── run_image_3d.py             # ⭐ Image → high-res solid 3D mesh
+├── run_slam_3d.py              # ⭐ Monocular SLAM 3D mapping
+├── run_splat_viewer.py         # ⭐ View any PLY as splats in Rerun
+└── ui/server.py                # FastAPI + SSE backend
 ```
 
 ---
