@@ -258,6 +258,67 @@ def export_obj(verts, faces, colors, output_path):
     print(f"  OBJ saved ({len(verts):,} verts, {len(faces):,} faces)")
 
 
+def view_points_in_rerun(positions, colors, scales, source_img_rgb, f_px):
+    """Visualize the SHARP Gaussian point cloud in Rerun."""
+    import rerun as rr
+
+    rr.init("Splatline Image-to-3D Point Cloud (SHARP)")
+    rr.spawn(memory_limit="2GiB", server_memory_limit="4GiB")
+
+    h, w = source_img_rgb.shape[:2]
+
+    # Compute radii from scales
+    if scales.ndim > 1:
+        radii = np.mean(scales, axis=1) * 2.0
+    else:
+        radii = scales * 2.0
+
+    # Log the point cloud
+    rr.log("image/points",
+        rr.Points3D(
+            positions=np.ascontiguousarray(positions, dtype=np.float32),
+            colors=np.ascontiguousarray(colors, dtype=np.float32),
+            radii=np.ascontiguousarray(radii, dtype=np.float32),
+        )
+    )
+
+    # Log source image with pinhole camera
+    rr.log("image/camera",
+        rr.Pinhole(width=w, height=h, focal_length=float(f_px)),
+    )
+    rr.log("image/camera/image", rr.Image(source_img_rgb.astype(np.uint8)))
+
+    print("\nRerun viewer is open. Explore the SHARP point cloud.")
+    print("Press Ctrl+C to exit.")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nExiting...")
+
+
+def export_point_ply(positions, colors, output_path):
+    """Export point cloud to PLY format with colors."""
+    print(f"  Exporting PLY: {output_path}")
+    with open(output_path, 'w') as f:
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {len(positions)}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("end_header\n")
+        for i in range(len(positions)):
+            p = positions[i]
+            c = colors[i]
+            f.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f} {int(c[0]*255)} {int(c[1]*255)} {int(c[2]*255)}\n")
+    print(f"  PLY saved ({len(positions):,} points)")
+
+
 def view_in_rerun(verts, faces, normals, colors_rgba, source_img_rgb, f_px):
     """Visualize the solid mesh in Rerun with the source image."""
     import rerun as rr
@@ -295,17 +356,19 @@ def view_in_rerun(verts, faces, normals, colors_rgba, source_img_rgb, f_px):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert a single image to a high-resolution solid 3D mesh."
+        description="Convert a single image to a 3D model using Apple SHARP."
     )
     parser.add_argument("image", type=str, help="Path to the input image (JPG, PNG)")
+    parser.add_argument("--mode", type=str, default="solid", choices=["points", "solid"],
+                        help="Output mode: 'points' (SHARP point cloud) or 'solid' (mesh) (default: solid)")
     parser.add_argument("--res", type=int, default=1024,
-                        help="Voxel resolution along longest axis (default: 1024, max recommended: 1536)")
+                        help="Voxel resolution for solid mode (default: 1024, max: 1536)")
     parser.add_argument("--device", type=str, default="mps",
                         help="Torch device: mps, cuda, or cpu")
     parser.add_argument("--internal-size", type=int, default=1536,
                         help="SHARP inference size (default: 1536)")
     parser.add_argument("--dilation", type=int, default=3,
-                        help="Dilation iterations for gap closing (default: 3)")
+                        help="Dilation iterations for gap closing in solid mode (default: 3)")
     parser.add_argument("--no-view", action="store_true",
                         help="Skip Rerun visualization, just export files")
     parser.add_argument("--output-dir", type=str, default=None,
@@ -321,11 +384,16 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("SPLATLINE IMAGE-TO-3D — HIGH RESOLUTION SOLID MESH")
+    if args.mode == "points":
+        print("SPLATLINE IMAGE-TO-3D — SHARP POINT CLOUD")
+    else:
+        print("SPLATLINE IMAGE-TO-3D — HIGH RESOLUTION SOLID MESH")
     print("=" * 60)
     print(f"Image: {image_path.name}")
+    print(f"Mode: {args.mode}")
     print(f"Output: {output_dir}")
-    print(f"Voxel resolution: {args.res}")
+    if args.mode == "solid":
+        print(f"Voxel resolution: {args.res}")
     print(f"Device: {args.device}")
     print()
 
@@ -343,24 +411,16 @@ def main():
         mask = opacities > 0.1
         positions = positions[mask]
         colors = colors[mask]
+        if scales.ndim > 1 and scales.shape[0] == len(opacities):
+            scales = scales[mask]
 
     print(f"  Points: {len(positions):,}")
 
     if len(positions) < 100:
-        print("Error: Not enough points to reconstruct mesh")
+        print("Error: Not enough points")
         sys.exit(1)
 
-    # Step 3: Reconstruct solid mesh
-    print(f"\nReconstructing solid mesh at {args.res} resolution...")
-    t0 = time.time()
-    verts, faces, normals = reconstruct_solid_mesh(
-        positions, colors, resolution=args.res, dilation_iter=args.dilation
-    )
-    print(f"  Reconstruction took {time.time() - t0:.1f}s")
-
-    # Step 4: Project colors from source image
-    print("\nProjecting colors from source image (bilinear interpolation)...")
-    t0 = time.time()
+    # Load source image for color projection and visualization
     source_img = cv2.imread(str(frame_path))
     source_img_rgb = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
     source_img_f = source_img_rgb.astype(np.float32)
@@ -368,32 +428,69 @@ def main():
     from sharp.utils import io as sharp_io
     _, _, f_px = sharp_io.load_rgb(Path(frame_path))
 
-    colors_rgba = project_colors_bilinear(verts, source_img_f, f_px, positions, colors)
-    unique_colors = len(np.unique(colors_rgba[:, :3], axis=0))
-    print(f"  Color projection took {time.time() - t0:.1f}s")
-    print(f"  Unique colors: {unique_colors:,}")
-    print(f"  Color stats: R={colors_rgba[:,0].mean():.0f} G={colors_rgba[:,1].mean():.0f} B={colors_rgba[:,2].mean():.0f}")
+    if args.mode == "points":
+        # --- Point cloud mode (Apple SHARP raw output) ---
+        print("\nPoint cloud mode — exporting raw SHARP Gaussians...")
 
-    # Step 5: Export mesh files
-    print("\nExporting mesh files...")
-    ply_out = output_dir / f"{image_path.stem}_solid_mesh.ply"
-    obj_out = output_dir / f"{image_path.stem}_solid_mesh.obj"
-    export_ply(verts, faces, colors_rgba, ply_out)
-    export_obj(verts, faces, colors_rgba, obj_out)
+        # Export point cloud PLY
+        ply_out = output_dir / f"{image_path.stem}_points.ply"
+        export_point_ply(positions, colors, ply_out)
 
-    # Step 6: Visualize in Rerun
-    if not args.no_view:
-        print("\nLaunching Rerun viewer...")
-        view_in_rerun(verts, faces, normals, colors_rgba, source_img_rgb, f_px)
+        if not args.no_view:
+            print("\nLaunching Rerun viewer...")
+            view_points_in_rerun(positions, colors, scales, source_img_rgb, f_px)
+        else:
+            print("\nSkipping Rerun viewer (--no-view flag)")
+
+        print("\n" + "=" * 60)
+        print("DONE")
+        print("=" * 60)
+        print(f"Points: {len(positions):,}")
+        print(f"PLY:   {ply_out}")
+
     else:
-        print("\nSkipping Rerun viewer (--no-view flag)")
+        # --- Solid mesh mode ---
+        if len(positions) < 100:
+            print("Error: Not enough points to reconstruct mesh")
+            sys.exit(1)
 
-    print("\n" + "=" * 60)
-    print("DONE")
-    print("=" * 60)
-    print(f"Mesh: {len(verts):,} vertices, {len(faces):,} faces")
-    print(f"PLY:  {ply_out}")
-    print(f"OBJ:  {obj_out}")
+        # Step 3: Reconstruct solid mesh
+        print(f"\nReconstructing solid mesh at {args.res} resolution...")
+        t0 = time.time()
+        verts, faces, normals = reconstruct_solid_mesh(
+            positions, colors, resolution=args.res, dilation_iter=args.dilation
+        )
+        print(f"  Reconstruction took {time.time() - t0:.1f}s")
+
+        # Step 4: Project colors from source image
+        print("\nProjecting colors from source image (bilinear interpolation)...")
+        t0 = time.time()
+        colors_rgba = project_colors_bilinear(verts, source_img_f, f_px, positions, colors)
+        unique_colors = len(np.unique(colors_rgba[:, :3], axis=0))
+        print(f"  Color projection took {time.time() - t0:.1f}s")
+        print(f"  Unique colors: {unique_colors:,}")
+        print(f"  Color stats: R={colors_rgba[:,0].mean():.0f} G={colors_rgba[:,1].mean():.0f} B={colors_rgba[:,2].mean():.0f}")
+
+        # Step 5: Export mesh files
+        print("\nExporting mesh files...")
+        ply_out = output_dir / f"{image_path.stem}_solid_mesh.ply"
+        obj_out = output_dir / f"{image_path.stem}_solid_mesh.obj"
+        export_ply(verts, faces, colors_rgba, ply_out)
+        export_obj(verts, faces, colors_rgba, obj_out)
+
+        # Step 6: Visualize in Rerun
+        if not args.no_view:
+            print("\nLaunching Rerun viewer...")
+            view_in_rerun(verts, faces, normals, colors_rgba, source_img_rgb, f_px)
+        else:
+            print("\nSkipping Rerun viewer (--no-view flag)")
+
+        print("\n" + "=" * 60)
+        print("DONE")
+        print("=" * 60)
+        print(f"Mesh: {len(verts):,} vertices, {len(faces):,} faces")
+        print(f"PLY:  {ply_out}")
+        print(f"OBJ:  {obj_out}")
 
 
 if __name__ == "__main__":

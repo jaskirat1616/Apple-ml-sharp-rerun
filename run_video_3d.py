@@ -155,9 +155,6 @@ def view_in_rerun(gaussians_dir, frames_dir, fps):
 
         radii = np.mean(scales, axis=1) * 2.0 if scales.ndim > 1 else scales * 2.0
 
-        # Boost brightness (SHARP colors can be dark)
-        colors = np.clip(colors * 1.8, 0, 1)
-
         rr.log("video/gaussians", rr.Points3D(
             positions=positions,
             colors=colors,
