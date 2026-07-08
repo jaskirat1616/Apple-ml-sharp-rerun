@@ -365,6 +365,7 @@ def _prepare_inputs(args) -> Tuple[Path, Path, Path, float, str]:
                 model_url=args.sharp_model_url,
                 checkpoint_path=args.sharp_checkpoint,
                 internal_size=args.sharp_internal_size,
+                video_path=video_path,
             )
         elif not gaussians_dir.exists():
             raise FileNotFoundError("--skip-sharp was set, but no gaussians directory exists")
@@ -392,6 +393,7 @@ def _run_splat_conversion(
     model_url,
     checkpoint_path,
     internal_size: int,
+    video_path: Optional[Path] = None,
 ) -> None:
     """Run splat conversion with the selected backend."""
     if backend == "sharp":
@@ -411,6 +413,7 @@ def _run_splat_conversion(
             backend=backend,
             device=device,
             skip_existing=True,
+            video_path=video_path,
         )
 
 
@@ -433,8 +436,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--splat-backend",
         default="sharp",
-        choices=["sharp", "triposplat", "depthsplat", "longsplat"],
-        help="3D reconstruction backend (sharp=non-commercial research, triposplat=MIT open-source)",
+        choices=["sharp", "triposplat", "vggt", "depthsplat", "longsplat"],
+        help="3D reconstruction backend: sharp (per-frame, non-commercial), triposplat (per-frame, MIT), "
+             "vggt (geometry bootstrap, feed-forward), depthsplat (multi-view, MIT), longsplat (video-native coherent)",
     )
     # v2: human pipeline tier
     parser.add_argument(

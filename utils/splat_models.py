@@ -65,25 +65,25 @@ SPLAT_BACKENDS: Dict[str, SplatBackendInfo] = {
     "depthsplat": SplatBackendInfo(
         key="depthsplat",
         name="DepthSplat",
-        status="research_reference",
+        status="implemented",
         license="MIT (fully open-source, commercial OK)",
         commercial_ok=True,
-        input_mode="sparse multi-view images (up to 12 views)",
-        output_contract="3DGS PLY possible through project configs",
-        recommended_for="multi-view keyframe groups with overlapping coverage",
-        notes="CVPR 2025. Connects depth estimation and Gaussian splatting. MIT license.",
+        input_mode="sparse multi-view images (2-10 views)",
+        output_contract="3DGS PLY via built-in save_gaussian_ply()",
+        recommended_for="multi-view keyframe groups — geometrically consistent 3DGS",
+        notes="CVPR 2025. Pre-trained models on HuggingFace. Built-in PLY export. Multi-view consistency.",
         source_url="https://github.com/cvg/depthsplat",
     ),
     "longsplat": SplatBackendInfo(
         key="longsplat",
         name="LongSplat",
-        status="research_reference",
+        status="implemented",
         license="NVlabs (check terms)",
         commercial_ok=False,
         input_mode="casual long videos (unposed)",
-        output_contract="3DGS PLY via converter script",
+        output_contract="3DGS PLY via convert_3dgs.py — single coherent scene",
         recommended_for="video-native temporal coherence — single coherent scene from full video",
-        notes="ICCV 2025. MASt3R pose estimation + adaptive octree anchoring. Memory-efficient.",
+        notes="ICCV 2025. MASt3R pose estimation + adaptive octree anchoring. Training-based (not feed-forward).",
         source_url="https://github.com/NVlabs/LongSplat",
     ),
     "splinegs": SplatBackendInfo(
@@ -101,13 +101,13 @@ SPLAT_BACKENDS: Dict[str, SplatBackendInfo] = {
     "vggt": SplatBackendInfo(
         key="vggt",
         name="VGGT",
-        status="research_reference",
-        license="Custom (commercial checkpoint available via application)",
+        status="implemented",
+        license="MIT (model checkpoint CC-BY-NC, code MIT)",
         commercial_ok=True,
-        input_mode="one to hundreds of views",
-        output_contract="camera parameters, depth, point maps, tracks; not native 3DGS PLY",
-        recommended_for="geometry bootstrap before Gaussian export",
-        notes="CVPR 2025 Best Paper. Feed-forward all 3D attributes in <1 second.",
+        input_mode="one to hundreds of views (feed-forward)",
+        output_contract="camera poses + depth + point cloud → converted to 3DGS PLY",
+        recommended_for="geometry bootstrap — replaces COLMAP, feed-forward camera poses + dense depth",
+        notes="CVPR 2025 Best Paper. Feed-forward all 3D attributes in <1 second. Pre-trained on HuggingFace.",
         source_url="https://github.com/facebookresearch/vggt",
     ),
     "noposplat": SplatBackendInfo(
@@ -311,8 +311,24 @@ def convert_frames_to_splats(
     checkpoint_path: Optional[Path] = None,
     internal_size: int = 1536,
     skip_existing: bool = True,
+    video_path: Optional[Path] = None,
 ) -> Path:
-    """Convert frames to per-frame splat PLY files with a supported backend."""
+    """Convert frames to per-frame splat PLY files with a supported backend.
+
+    Args:
+        frames_dir: Directory containing extracted video frames.
+        output_dir: Output directory (gaussians/ subdirectory created).
+        backend: Backend key — "sharp", "triposplat", "vggt", "depthsplat", "longsplat".
+        device: torch device ("default", "cuda", "mps", "cpu").
+        model_url: SHARP model URL (sharp backend only).
+        checkpoint_path: Local SHARP checkpoint path (sharp backend only).
+        internal_size: SHARP internal inference size (sharp backend only).
+        skip_existing: Skip frames that already have PLY files.
+        video_path: Original video path (needed for LongSplat FPS extraction).
+
+    Returns:
+        Path to the gaussians directory.
+    """
     info = get_splat_backend(backend)
     if info.status != "implemented":
         raise NotImplementedError(
@@ -335,6 +351,34 @@ def convert_frames_to_splats(
         return convert_frames_with_triposplat(
             frames_dir=frames_dir,
             output_dir=output_dir,
+            device=device,
+            skip_existing=skip_existing,
+        )
+
+    if backend == "vggt":
+        from utils.backends.vggt_backend import convert_video_with_vggt
+        return convert_video_with_vggt(
+            frames_dir=frames_dir,
+            output_dir=output_dir,
+            device=device,
+            skip_existing=skip_existing,
+        )
+
+    if backend == "depthsplat":
+        from utils.backends.depthsplat_backend import convert_frames_with_depthsplat
+        return convert_frames_with_depthsplat(
+            frames_dir=frames_dir,
+            output_dir=output_dir,
+            device=device,
+            skip_existing=skip_existing,
+        )
+
+    if backend == "longsplat":
+        from utils.backends.longsplat_backend import convert_video_with_longsplat
+        return convert_video_with_longsplat(
+            frames_dir=frames_dir,
+            output_dir=output_dir,
+            video_path=video_path,
             device=device,
             skip_existing=skip_existing,
         )

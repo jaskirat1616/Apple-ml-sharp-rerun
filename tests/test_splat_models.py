@@ -49,6 +49,28 @@ class SplatModelRegistryTests(unittest.TestCase):
             self.assertTrue(backend.license, f"{backend.key} missing license")
             self.assertIsInstance(backend.commercial_ok, bool)
 
+    # v2 reconstruction backend tests
+    def test_vggt_backend_is_implemented(self):
+        info = get_splat_backend("vggt")
+        self.assertEqual(info.status, "implemented")
+        self.assertIn("CVPR 2025", info.notes)
+
+    def test_depthsplat_backend_is_implemented(self):
+        info = get_splat_backend("depthsplat")
+        self.assertEqual(info.status, "implemented")
+        self.assertTrue(info.commercial_ok)
+        self.assertIn("MIT", info.license)
+
+    def test_longsplat_backend_is_implemented(self):
+        info = get_splat_backend("longsplat")
+        self.assertEqual(info.status, "implemented")
+        self.assertIn("coherent", info.output_contract.lower())
+
+    def test_five_implemented_backends(self):
+        implemented = [b for b in list_splat_backends() if b.status == "implemented"]
+        keys = {b.key for b in implemented}
+        self.assertEqual(keys, {"sharp", "triposplat", "vggt", "depthsplat", "longsplat"})
+
 
 if __name__ == "__main__":
     unittest.main()

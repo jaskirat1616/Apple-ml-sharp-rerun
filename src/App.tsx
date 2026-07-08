@@ -445,8 +445,11 @@ export default function App() {
                         <option key={b.key} value={b.key}>{b.name}</option>
                       )) : (
                         <>
-                          <option value="sharp">Apple SHARP</option>
-                          <option value="triposplat">TripoSplat</option>
+                          <option value="sharp">Apple SHARP (per-frame)</option>
+                          <option value="triposplat">TripoSplat (per-frame, MIT)</option>
+                          <option value="vggt">VGGT (geometry bootstrap)</option>
+                          <option value="depthsplat">DepthSplat (multi-view, MIT)</option>
+                          <option value="longsplat">LongSplat (video-native coherent)</option>
                         </>
                       )}
                     </select>

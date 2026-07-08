@@ -106,12 +106,23 @@ BACKEND_CHOICES = [
         "source_url": "https://github.com/VAST-AI-Research/TripoSplat",
     },
     {
+        "key": "vggt",
+        "name": "VGGT",
+        "license": "MIT (code), CC-BY-NC (model checkpoint)",
+        "commercial_ok": True,
+        "description": "Geometry foundation model: feed-forward camera poses + "
+                       "dense depth + point cloud from video frames. "
+                       "CVPR 2025 Best Paper. Replaces COLMAP.",
+        "source_url": "https://github.com/facebookresearch/vggt",
+    },
+    {
         "key": "depthsplat",
         "name": "DepthSplat",
         "license": "MIT (fully open-source, commercial OK)",
         "commercial_ok": True,
         "description": "Multi-view depth + Gaussian splatting. CVPR 2025. "
-                       "Best for keyframe groups with overlapping views.",
+                       "Best for keyframe groups with overlapping views. "
+                       "Built-in PLY export, pre-trained models.",
         "source_url": "https://github.com/cvg/depthsplat",
     },
     {
@@ -119,8 +130,9 @@ BACKEND_CHOICES = [
         "name": "LongSplat",
         "license": "NVlabs (check terms)",
         "commercial_ok": False,
-        "description": "Video-native: coherent 3DGS from full video with MASt3R "
-                       "pose estimation. ICCV 2025. Temporal coherence.",
+        "description": "Video-native: single coherent 3DGS scene from full video "
+                       "with MASt3R pose estimation. ICCV 2025. "
+                       "Training-based (slower but temporally coherent).",
         "source_url": "https://github.com/NVlabs/LongSplat",
     },
 ]

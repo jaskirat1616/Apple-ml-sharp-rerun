@@ -81,6 +81,15 @@ class SplatlineConfigTests(unittest.TestCase):
         keys = [c["key"] for c in BACKEND_CHOICES]
         self.assertIn("triposplat", keys)
 
+    def test_vggt_is_in_choices(self):
+        from utils.splatline_config import BACKEND_CHOICES
+        keys = [c["key"] for c in BACKEND_CHOICES]
+        self.assertIn("vggt", keys)
+
+    def test_five_backend_choices(self):
+        from utils.splatline_config import BACKEND_CHOICES
+        self.assertEqual(len(BACKEND_CHOICES), 5)
+
 
 if __name__ == "__main__":
     unittest.main()
