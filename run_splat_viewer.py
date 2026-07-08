@@ -55,6 +55,37 @@ DEFAULT_SETTINGS = {
 }
 
 
+def convert_to_standard_ply(input_path, output_path):
+    """Convert SHARP PLY (with extra elements) to standard 3DGS PLY.
+
+    SHARP PLY files contain extra elements (extrinsic, intrinsic, image_size,
+    frame, disparity, color_space, version) that standard 3DGS viewers like
+    SuperSplat can't parse. This strips those extra elements and keeps only
+    the vertex data with standard 3DGS properties.
+    """
+    from plyfile import PlyData, PlyElement
+    import numpy as np
+
+    ply = PlyData.read(str(input_path))
+    vertex = ply['vertex']
+
+    # Check if it's already standard format (only vertex element)
+    if len(ply.elements) == 1:
+        # Already standard — just copy
+        shutil.copy2(input_path, output_path)
+        print(f"  PLY already standard format ({len(vertex.data):,} verts)")
+        return
+
+    # Rebuild with only vertex element
+    # Keep all vertex properties as-is
+    new_vertex = PlyElement.describe(vertex.data, 'vertex')
+    new_ply = PlyData([new_vertex], text=False, byte_order='<')
+    new_ply.write(str(output_path))
+
+    print(f"  Converted: {len(vertex.data):,} verts, stripped {len(ply.elements)-1} extra elements")
+    print(f"  Output: {output_path.stat().st_size / 1e6:.1f} MB")
+
+
 def find_viewer_files():
     """Find the supersplat-viewer files from the npm package."""
     # Check common npm locations
@@ -133,10 +164,10 @@ def main():
             print(f"  Copying {fname}...")
             shutil.copy2(src, dst)
 
-    # Copy PLY file
+    # Convert SHARP PLY to standard 3DGS PLY (strip extra elements)
     ply_copy = viewer_dir / "scene.ply"
-    print(f"  Copying PLY ({ply_path.stat().st_size / 1e6:.1f} MB)...")
-    shutil.copy2(ply_path, ply_copy)
+    print(f"  Converting SHARP PLY to standard 3DGS format...")
+    convert_to_standard_ply(ply_path, ply_copy)
 
     # Write settings.json
     settings_path = viewer_dir / "settings.json"
