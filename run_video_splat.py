@@ -627,10 +627,11 @@ def main():
         def log_message(self, format, *args):
             pass
 
-    # Find available port
+    # Find available port — use 9000+ to avoid service worker cache from
+    # the SuperSplat editor which was on port 8765
     server = None
-    PORT = 8765
-    for port in range(8765, 8780):
+    PORT = 9000
+    for port in range(9000, 9020):
         try:
             socketserver.TCPServer.allow_reuse_address = True
             server = socketserver.ThreadingTCPServer(("localhost", port), Handler)
