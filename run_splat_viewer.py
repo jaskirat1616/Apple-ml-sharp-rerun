@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Splatline Splat Viewer — Full SuperSplat editor running locally.
+Splatline Splat Viewer — View PLY files as Gaussian splats in the Splatline editor.
 
-Serves the official SuperSplat editor (https://github.com/playcanvas/supersplat)
-from a local web server with your PLY file auto-loaded. You get every feature:
-selection, cutting planes, splat deletion, transform tools, export, etc.
+Serves the Splatline editor (powered by the PlayCanvas engine from
+github.com/playcanvas/supersplat) from a local web server with your PLY file
+auto-loaded. You get every feature: selection, cutting planes, splat deletion,
+transform tools, export, etc.
 
 Automatically converts SHARP PLY files to standard 3DGS format.
 
@@ -42,14 +43,14 @@ def convert_to_standard_ply(input_path, output_path):
 
 
 def find_or_build_editor():
-    """Find or build the SuperSplat editor dist files."""
+    """Find or build the Splatline editor dist files."""
     # Already built?
     dist_dir = Path("/tmp/supersplat/dist")
     if (dist_dir / "index.html").exists() and (dist_dir / "index.js").exists():
         return dist_dir
 
     # Clone and build
-    print("Cloning SuperSplat editor...")
+    print("Cloning Splatline editor source...")
     repo_dir = Path("/tmp/supersplat")
     if not repo_dir.exists():
         result = subprocess.run(
@@ -64,7 +65,7 @@ def find_or_build_editor():
     subprocess.run(["npm", "install"], cwd=str(repo_dir),
                    capture_output=True, text=True, timeout=120)
 
-    print("Building editor...")
+    print("Building Splatline editor...")
     result = subprocess.run(["npm", "run", "build"], cwd=str(repo_dir),
                             capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
@@ -88,10 +89,10 @@ def main():
         print(f"Error: PLY file not found: {ply_path}")
         sys.exit(1)
 
-    # Find or build the SuperSplat editor
+    # Find or build the Splatline editor
     editor_dist = find_or_build_editor()
     if not editor_dist:
-        print("Error: Could not build SuperSplat editor")
+        print("Error: Could not build Splatline editor")
         print("Try: cd /tmp/supersplat && npm install && npm run build")
         sys.exit(1)
 
@@ -101,15 +102,17 @@ def main():
         shutil.rmtree(viewer_dir)
     viewer_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Copying SuperSplat editor...")
+    print("Copying Splatline editor...")
     shutil.copytree(editor_dist, viewer_dir, dirs_exist_ok=True)
 
     # Disable service worker — it caches old content and causes black screens
+    # Also rename the page title to Splatline
     index_html = (viewer_dir / "index.html").read_text()
     index_html = index_html.replace(
         "navigator.serviceWorker",
         "null && navigator.serviceWorker"
     )
+    index_html = index_html.replace("<title>SuperSplat</title>", "<title>Splatline</title>")
     (viewer_dir / "index.html").write_text(index_html)
 
     # Convert PLY to standard format
@@ -156,7 +159,7 @@ def main():
         sys.exit(1)
 
     print("=" * 60)
-    print("SPLATLINE SPLAT VIEWER (SuperSplat Editor)")
+    print("SPLATLINE SPLAT VIEWER")
     print("=" * 60)
     print(f"PLY file: {ply_path.name}")
     print(f"Editor:   http://localhost:{PORT}")
