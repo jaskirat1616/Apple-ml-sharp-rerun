@@ -104,6 +104,14 @@ def main():
     print("Copying SuperSplat editor...")
     shutil.copytree(editor_dist, viewer_dir, dirs_exist_ok=True)
 
+    # Disable service worker — it caches old content and causes black screens
+    index_html = (viewer_dir / "index.html").read_text()
+    index_html = index_html.replace(
+        "navigator.serviceWorker",
+        "null && navigator.serviceWorker"
+    )
+    (viewer_dir / "index.html").write_text(index_html)
+
     # Convert PLY to standard format
     print(f"Converting PLY ({ply_path.stat().st_size / 1e6:.1f} MB)...")
     ply_copy = viewer_dir / "scene.ply"
@@ -136,7 +144,8 @@ def main():
     PORT = 8765
     for port in range(8765, 8780):
         try:
-            server = socketserver.TCPServer(("localhost", port), Handler)
+            socketserver.TCPServer.allow_reuse_address = True
+            server = socketserver.ThreadingTCPServer(("localhost", port), Handler)
             PORT = port
             break
         except OSError:
