@@ -45,31 +45,64 @@ def convert_to_standard_ply(input_path, output_path):
     new_ply.write(str(output_path))
 
 
-def merge_ply_files(ply_paths, output_path):
-    """Merge multiple PLY files into a single combined PLY."""
+def merge_ply_files(ply_paths, output_path, max_per_frame=50000):
+    """Merge multiple PLY files into a single combined PLY.
+
+    Subsamples each frame to max_per_frame splats (kept by highest opacity)
+    to keep the merged file manageable for the browser.
+    """
     from plyfile import PlyData, PlyElement
 
-    all_vertices = []
-    offset = np.array([0.0, 0.0, 0.0])
+    # First pass: figure out the vertex dtype from the first file
+    first_ply = PlyData.read(str(ply_paths[0]))
+    vertex = first_ply['vertex']
+    dtype = vertex.data.dtype
+    total_splats = 0
 
-    for i, ply_path in enumerate(ply_paths):
-        ply = PlyData.read(str(ply_path))
-        vertex = ply['vertex']
-        data = vertex.data.copy()
+    # Open output file and write header
+    with open(output_path, 'wb') as f:
+        # Count total splats after subsampling
+        frame_counts = []
+        for ply_path in ply_paths:
+            ply = PlyData.read(str(ply_path))
+            count = min(ply['vertex'].count, max_per_frame)
+            frame_counts.append(count)
+            total_splats += count
 
-        # Offset each frame in Z so they don't overlap
-        # Space them out by 2 units along Z
-        data['z'] = data['z'] + float(i * 2.0)
+        # Write PLY header
+        header = f"ply\nformat binary_little_endian 1.0\nelement vertex {total_splats}\n"
+        for name in dtype.names:
+            t = dtype[name]
+            if t.kind == 'f':
+                header += f"property float {name}\n"
+            elif t.kind == 'u':
+                header += f"property uchar {name}\n"
+            else:
+                header += f"property {t} {name}\n"
+        header += "end_header\n"
+        f.write(header.encode('ascii'))
 
-        all_vertices.append(data)
-        print(f"  Frame {i}: {len(data):,} splats")
+        # Second pass: subsample and write each frame
+        for i, ply_path in enumerate(ply_paths):
+            ply = PlyData.read(str(ply_path))
+            vertex = ply['vertex']
+            data = vertex.data
 
-    combined = np.concatenate(all_vertices)
-    new_vertex = PlyElement.describe(combined, 'vertex')
-    new_ply = PlyData([new_vertex], text=False, byte_order='<')
-    new_ply.write(str(output_path))
+            # Subsample: keep top-opacity splats
+            if vertex.count > max_per_frame:
+                opacities = data['opacity']
+                top_idx = np.argsort(opacities)[-max_per_frame:]
+                data = data[top_idx]
 
-    print(f"  Merged: {len(combined):,} total splats -> {output_path.name}")
+            data = data.copy()
+            # Offset each frame along Z so the sequence is visible in 3D
+            data['z'] = data['z'] + float(i * 2.0)
+
+            f.write(data.tobytes())
+            print(f"  Frame {i}: {len(data):,} splats (z-offset={i*2.0:.1f})")
+
+    size_mb = output_path.stat().st_size / 1e6
+    print(f"  Merged: {total_splats:,} total splats, {size_mb:.1f} MB -> {output_path.name}")
     return output_path
 
 
@@ -152,13 +185,13 @@ def main():
 
     # Build the URL for loading PLYs
     if mode == "merge":
-        # Merge all frames into one PLY
+        # Merge all frames into one PLY (subsampled to keep file size reasonable)
+        # 50K splats/frame × 80 frames = 4M splats ≈ 270 MB — manageable for browser
+        max_per_frame = 50000
         print(f"\nMerging {len(ply_files)} frames into one splat scene...")
+        print(f"  (subsampling to {max_per_frame:,} splats per frame)")
         merged_path = viewer_dir / "merged.ply"
-
-        # Check if we need to convert first (strip extra elements)
-        # merge_ply_files handles raw SHARP PLYs directly
-        merge_ply_files(ply_files, merged_path)
+        merge_ply_files(ply_files, merged_path, max_per_frame=max_per_frame)
         load_url = "merged.ply"
         filename = f"{output_dir.name}_merged.ply"
     else:
