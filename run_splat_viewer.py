@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-Splatline Splat Viewer — View PLY files as Gaussian splats in Rerun.
+Splatline Splat Viewer — View PLY files as oriented Gaussian splats in Rerun.
 
-Renders PLY files as Gaussian splats with proper colors (sRGB converted from
-SHARP's linearRGB), opacity filtering, and scale-based radii.
+Renders each Gaussian as an oriented ellipsoid (like superspl.at/editor),
+not just bubbles. Each splat has:
+  - position (x, y, z)
+  - rotation (quaternion)
+  - scale (per-axis half-size)
+  - color (from SH coefficients, sRGB)
+  - opacity (alpha)
 
 Usage:
   python run_splat_viewer.py <ply_file>
@@ -15,17 +20,15 @@ import time
 from pathlib import Path
 
 import numpy as np
-import torch
 
 
 def load_ply_splat(ply_path):
-    """Load a PLY file and return splat data with sRGB colors.
+    """Load a PLY file and return splat data.
 
     Supports both SHARP 3DGS format (f_dc_0/1/2, opacity, scale, rot) and
     simple point cloud format (red/green/blue).
     """
     from plyfile import PlyData
-    import numpy as np
 
     ply = PlyData.read(str(ply_path))
     vertex = ply['vertex']
@@ -53,7 +56,7 @@ def load_ply_splat(ply_path):
     else:
         colors = np.full((len(positions), 3), 0.8, dtype=np.float32)
 
-    # Scales
+    # Scales (log-space in 3DGS format)
     if 'scale_0' in props:
         scales = np.stack([
             np.exp(vertex['scale_0']),
@@ -63,15 +66,36 @@ def load_ply_splat(ply_path):
     else:
         scales = np.full((len(positions), 3), 0.01, dtype=np.float32)
 
-    # Opacity filter
+    # Rotations (quaternion: w, x, y, z)
+    if 'rot_0' in props:
+        quats = np.stack([
+            vertex['rot_0'],
+            vertex['rot_1'],
+            vertex['rot_2'],
+            vertex['rot_3'],
+        ], axis=-1).astype(np.float32)
+        # Normalize quaternions
+        norms = np.linalg.norm(quats, axis=-1, keepdims=True)
+        quats = quats / np.maximum(norms, 1e-8)
+    else:
+        quats = None
+
+    # Opacity
     if 'opacity' in props:
         opacities = 1.0 / (1.0 + np.exp(-vertex['opacity'].astype(np.float32)))
-        mask = opacities > 0.1
-        positions = positions[mask]
-        colors = colors[mask]
-        scales = scales[mask]
+    else:
+        opacities = np.ones(len(positions), dtype=np.float32)
 
-    return positions, colors, scales
+    # Filter low-opacity points
+    mask = opacities > 0.01
+    positions = positions[mask]
+    colors = colors[mask]
+    scales = scales[mask]
+    opacities = opacities[mask]
+    if quats is not None:
+        quats = quats[mask]
+
+    return positions, colors, scales, quats, opacities
 
 
 def main():
@@ -89,7 +113,7 @@ def main():
         sys.exit(1)
 
     print("=" * 60)
-    print("SPLATLINE SPLAT VIEWER (Rerun)")
+    print("SPLATLINE SPLAT VIEWER (Rerun — oriented ellipsoids)")
     print("=" * 60)
     print(f"PLY file: {ply_path.name}")
     print(f"File size: {ply_path.stat().st_size / 1e6:.1f} MB")
@@ -98,15 +122,30 @@ def main():
     # Load splat data
     print("Loading PLY...")
     t0 = time.time()
-    positions, colors, scales = load_ply_splat(ply_path)
+    positions, colors, scales, quats, opacities = load_ply_splat(ply_path)
     print(f"  Loaded {len(positions):,} splats in {time.time()-t0:.1f}s")
     print(f"  Color range: {colors.min():.3f} - {colors.max():.3f} (mean {colors.mean():.3f})")
 
-    # Compute radii from scales
-    if scales.ndim > 1:
-        radii = np.mean(scales, axis=1) * 2.0
-    else:
-        radii = scales * 2.0
+    # For large splat counts, subsample to keep Rerun responsive
+    MAX_SPLATS = 50000
+    if len(positions) > MAX_SPLATS:
+        print(f"  Subsampling to {MAX_SPLATS:,} splats (from {len(positions):,}) for performance...")
+        idx = np.random.choice(len(positions), MAX_SPLATS, replace=False)
+        positions = positions[idx]
+        colors = colors[idx]
+        scales = scales[idx]
+        opacities = opacities[idx]
+        if quats is not None:
+            quats = quats[idx]
+
+    # Half-sizes for ellipsoids — scale up so they're visible
+    # SuperSplat uses 3x the exp(scale) for the ellipsoid radius
+    half_sizes = scales * 3.0
+
+    # Build RGBA colors with opacity
+    rgba = np.zeros((len(positions), 4), dtype=np.float32)
+    rgba[:, :3] = np.clip(colors, 0, 1)
+    rgba[:, 3] = np.clip(opacities, 0, 1)
 
     # Launch Rerun
     import rerun as rr
@@ -114,17 +153,22 @@ def main():
     rr.init("Splatline Splat Viewer")
     rr.spawn(memory_limit="2GiB", server_memory_limit="4GiB")
 
-    # Log the splats
+    # Log the splats as oriented ellipsoids
     print("\nLogging to Rerun...")
-    rr.log("splats",
-        rr.Points3D(
-            positions=np.ascontiguousarray(positions, dtype=np.float32),
-            colors=np.ascontiguousarray(colors, dtype=np.float32),
-            radii=np.ascontiguousarray(radii, dtype=np.float32),
-        )
+    kwargs = dict(
+        centers=np.ascontiguousarray(positions, dtype=np.float32),
+        half_sizes=np.ascontiguousarray(half_sizes, dtype=np.float32),
+        colors=np.ascontiguousarray(rgba, dtype=np.float32),
+        fill_mode=rr.components.FillMode.Solid,
     )
+    if quats is not None:
+        # Rerun expects quaternions as [x, y, z, w]
+        quats_xyzw = quats[:, [1, 2, 3, 0]].astype(np.float32)
+        kwargs['quaternions'] = np.ascontiguousarray(quats_xyzw)
 
-    print(f"\nDone! {len(positions):,} splats in Rerun.")
+    rr.log("splats", rr.Ellipsoids3D(**kwargs))
+
+    print(f"\nDone! {len(positions):,} oriented ellipsoids in Rerun.")
     print("Press Ctrl+C to exit.")
 
     try:
