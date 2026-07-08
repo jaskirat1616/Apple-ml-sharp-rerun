@@ -170,16 +170,25 @@ function parsePly(arrayBuffer) {
 
   let vertexCount = 0;
   const props = [];
+  const propTypes = [];
+  let inVertex = false;
   for (const line of lines) {
     const words = line.trim().split(/\s+/);
-    if (words[0] === 'element' && words[1] === 'vertex') {
-      vertexCount = parseInt(words[2]);
-    } else if (words[0] === 'property' && words[1] === 'float') {
-      props.push(words[2]);
+    if (words[0] === 'element') {
+      inVertex = (words[1] === 'vertex');
+      if (inVertex) vertexCount = parseInt(words[2]);
+    } else if (words[0] === 'property' && inVertex) {
+      // property float x  OR  property uchar red
+      propTypes.push(words[1]);
+      props.push(words[words.length - 1]);
     }
   }
 
-  console.log(`PLY: ${vertexCount} vertices, ${props.length} properties: ${props.join(', ')}`);
+  // Compute byte size per vertex
+  const typeSizes = { 'float': 4, 'double': 8, 'uchar': 1, 'char': 1, 'ushort': 2, 'short': 2, 'uint': 4, 'int': 4 };
+  const stride = propTypes.reduce((sum, t) => sum + (typeSizes[t] || 4), 0);
+
+  console.log(`PLY: ${vertexCount} vertices, ${props.length} properties (${stride} bytes/vert): ${props.join(', ')}`);
 
   // Read vertex data
   const positions = new Float32Array(vertexCount * 3);
@@ -188,56 +197,61 @@ function parsePly(arrayBuffer) {
   const rotations = new Float32Array(vertexCount * 4);
   const opacities = new Float32Array(vertexCount);
 
-  const propIdx = {};
-  props.forEach((p, i) => { propIdx[p] = i; });
+  // Compute byte offset of each property within a vertex
+  const propOffsets = {};
+  let byteOffset = 0;
+  for (let i = 0; i < props.length; i++) {
+    propOffsets[props[i]] = byteOffset;
+    byteOffset += typeSizes[propTypes[i]] || 4;
+  }
 
-  const hasSH = 'f_dc_0' in propIdx;
-  const hasScale = 'scale_0' in propIdx;
-  const hasRot = 'rot_0' in propIdx;
-  const hasOpacity = 'opacity' in propIdx;
-  const hasRGB = 'red' in propIdx;
+  const hasSH = 'f_dc_0' in propOffsets;
+  const hasScale = 'scale_0' in propOffsets;
+  const hasRot = 'rot_0' in propOffsets;
+  const hasOpacity = 'opacity' in propOffsets;
+  const hasRGB = 'red' in propOffsets;
 
   const SH_C0 = 0.28209479177387814;
-  const stride = props.length * 4; // all float32
   let ptr = headerEnd;
 
   for (let i = 0; i < vertexCount; i++) {
     const base = ptr;
-    positions[i * 3]     = data.getFloat32(base + propIdx['x'] * 4, true);
-    positions[i * 3 + 1] = data.getFloat32(base + propIdx['y'] * 4, true);
-    positions[i * 3 + 2] = data.getFloat32(base + propIdx['z'] * 4, true);
+    positions[i * 3]     = data.getFloat32(base + propOffsets['x'], true);
+    positions[i * 3 + 1] = data.getFloat32(base + propOffsets['y'], true);
+    positions[i * 3 + 2] = data.getFloat32(base + propOffsets['z'], true);
 
     if (hasSH) {
-      colors[i * 3]     = 0.5 + SH_C0 * data.getFloat32(base + propIdx['f_dc_0'] * 4, true);
-      colors[i * 3 + 1] = 0.5 + SH_C0 * data.getFloat32(base + propIdx['f_dc_1'] * 4, true);
-      colors[i * 3 + 2] = 0.5 + SH_C0 * data.getFloat32(base + propIdx['f_dc_2'] * 4, true);
+      colors[i * 3]     = 0.5 + SH_C0 * data.getFloat32(base + propOffsets['f_dc_0'], true);
+      colors[i * 3 + 1] = 0.5 + SH_C0 * data.getFloat32(base + propOffsets['f_dc_1'], true);
+      colors[i * 3 + 2] = 0.5 + SH_C0 * data.getFloat32(base + propOffsets['f_dc_2'], true);
     } else if (hasRGB) {
-      colors[i * 3]     = data.getFloat32(base + propIdx['red'] * 4, true) / 255;
-      colors[i * 3 + 1] = data.getFloat32(base + propIdx['green'] * 4, true) / 255;
-      colors[i * 3 + 2] = data.getFloat32(base + propIdx['blue'] * 4, true) / 255;
+      const ri = propTypes[propOffsets['_red_idx'] || 0];
+      colors[i * 3]     = data.getUint8(base + propOffsets['red']) / 255;
+      colors[i * 3 + 1] = data.getUint8(base + propOffsets['green']) / 255;
+      colors[i * 3 + 2] = data.getUint8(base + propOffsets['blue']) / 255;
     } else {
       colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = 0.8;
     }
 
     if (hasScale) {
-      scales[i * 3]     = Math.exp(data.getFloat32(base + propIdx['scale_0'] * 4, true));
-      scales[i * 3 + 1] = Math.exp(data.getFloat32(base + propIdx['scale_1'] * 4, true));
-      scales[i * 3 + 2] = Math.exp(data.getFloat32(base + propIdx['scale_2'] * 4, true));
+      scales[i * 3]     = Math.exp(data.getFloat32(base + propOffsets['scale_0'], true));
+      scales[i * 3 + 1] = Math.exp(data.getFloat32(base + propOffsets['scale_1'], true));
+      scales[i * 3 + 2] = Math.exp(data.getFloat32(base + propOffsets['scale_2'], true));
     } else {
       scales[i * 3] = scales[i * 3 + 1] = scales[i * 3 + 2] = 0.01;
     }
 
     if (hasRot) {
-      rotations[i * 4]     = data.getFloat32(base + propIdx['rot_0'] * 4, true);
-      rotations[i * 4 + 1] = data.getFloat32(base + propIdx['rot_1'] * 4, true);
-      rotations[i * 4 + 2] = data.getFloat32(base + propIdx['rot_2'] * 4, true);
-      rotations[i * 4 + 3] = data.getFloat32(base + propIdx['rot_3'] * 4, true);
+      rotations[i * 4]     = data.getFloat32(base + propOffsets['rot_0'], true);
+      rotations[i * 4 + 1] = data.getFloat32(base + propOffsets['rot_1'], true);
+      rotations[i * 4 + 2] = data.getFloat32(base + propOffsets['rot_2'], true);
+      rotations[i * 4 + 3] = data.getFloat32(base + propOffsets['rot_3'], true);
     } else {
       rotations[i * 4] = 1; rotations[i * 4 + 1] = rotations[i * 4 + 2] = rotations[i * 4 + 3] = 0;
     }
 
     if (hasOpacity) {
-      const op = data.getFloat32(base + propIdx['opacity'] * 4, true);
+      const op = data.getFloat32(base + propOffsets['opacity'], true);
       opacities[i] = 1.0 / (1.0 + Math.exp(-op));
     } else {
       opacities[i] = 1.0;
