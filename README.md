@@ -2,7 +2,7 @@
 
 Convert 2D videos and photos into interactive 3D scenes using pluggable Gaussian-splatting backends and Rerun. **Splatline** is a toolkit for exploring Gaussian splat videos in 3D, with depth maps, navigation tools, pose overlays, and creative effects.
 
-> **v2.0.0** is a complete rebuild: pluggable reconstruction backends (SHARP + TripoSplat), a tiered human pipeline (MotionBERT skeleton + HMR 2.0 SMPL mesh), and a FastAPI + SSE backend. v1 scripts keep working unchanged. See [CHANGELOG.md](CHANGELOG.md) for the full diff. Splatline itself is **MIT-licensed**; see [License](#-license) and [NOTICE.md](NOTICE.md) for third-party restrictions.
+> **v2.0.0** is a complete rebuild focused on **2D-to-3D scene reconstruction quality**: three new state-of-the-art reconstruction backends (VGGT, DepthSplat, LongSplat) alongside SHARP and TripoSplat, a tiered human motion pipeline, and a FastAPI + SSE backend. v1 scripts keep working unchanged. See [CHANGELOG.md](CHANGELOG.md) for the full diff. Splatline itself is **MIT-licensed**; see [License](#-license) and [NOTICE.md](NOTICE.md) for third-party restrictions.
 
 ### GitHub repository name
 
@@ -22,23 +22,41 @@ git remote set-url origin https://github.com/<your-username>/splatline.git
 
 ## ✨ What's New in v2.0.0
 
-v2 keeps every v1 script working and adds a modern architecture on top.
+v2 keeps every v1 script working and adds a modern architecture on top. The focus is **reconstruction quality** — upgrading from per-frame independent splats to temporally coherent, geometrically consistent 3D scenes.
 
-### Pluggable reconstruction backends
+### Five implemented reconstruction backends
 
 A backend registry lets you swap the 3D reconstruction model without changing your workflow. On **first run**, Splatline shows a backend selector with license transparency; the choice persists in `~/.splatline/config.json`.
 
+**Per-frame backends** (fast, feed-forward):
+
 - **SHARP** (Apple, non-commercial research) — the v1 default. Per-frame 3DGS from a single image.
 - **TripoSplat** (MIT, SIGGRAPH 2026) — fully open, commercial-safe single-image 3DGS.
-- Tracked: **LongSplat** (NVlabs, ICCV 2025), **SplineGS** (MIT, CVPR 2025), **DepthSplat** (MIT, CVPR 2025), **VGGT** (CVPR 2025 Best Paper).
 
-Select with `--splat-backend sharp|triposplat|depthsplat|longsplat`. See [docs/SPLAT_MODELS.md](docs/SPLAT_MODELS.md).
+**Video-native backends** (new in v2, the core upgrade):
+
+- **VGGT** (CVPR 2025 Best Paper) — geometry foundation model. Feed-forward camera poses + dense depth + point cloud from video frames in under 1 second. **Replaces COLMAP entirely** — no slow SfM needed. Processes up to 50 frames per forward pass for global consistency. Pre-trained model auto-downloads from HuggingFace.
+- **DepthSplat** (CVPR 2025, MIT) — multi-view depth-conditioned Gaussian splatting. Uses 2+ context views for geometrically consistent 3DGS (not single-image like SHARP). Built-in PLY export, pre-trained models on HuggingFace. Keyframe group selection with overlapping windows for temporal coherence.
+- **LongSplat** (ICCV 2025, NVlabs) — **video-native coherent 3DGS**. Produces a single coherent 3DGS scene from the entire video using MASt3R pose estimation and temporal consistency losses. This solves v1's biggest problem: flickering between independent per-frame splats. Training-based (optimizes per video, slower but temporally coherent).
+
+Tracked for future integration: **SplineGS** (CVPR 2025), **NoPoSplat** (ICLR 2025), **AnySplat** (SIGGRAPH Asia 2025), **VolSplat** (ECCV 2026).
+
+Select with `--splat-backend sharp|triposplat|vggt|depthsplat|longsplat`. See [docs/SPLAT_MODELS.md](docs/SPLAT_MODELS.md).
+
+#### What this means for reconstruction quality
+
+| Problem in v1 | Solution in v2 |
+|---|---|
+| Per-frame independent splats → flickering | LongSplat: single coherent scene with temporal consistency |
+| No camera poses (COLMAP needed) | VGGT: feed-forward camera poses in <1s |
+| Single-image only (no multi-view) | DepthSplat: 2+ views for geometric consistency |
+| No global geometry | VGGT: dense depth + point cloud from whole video |
 
 ### Tiered human pipeline
 
-v2 replaces per-frame depth-lifting with a tiered human reconstruction pipeline, selected with `--human-tier skeleton|mesh|both`.
+v2 adds a tiered human reconstruction pipeline, selected with `--human-tier skeleton|mesh|both`.
 
-- **Tier 1 — skeleton:** **MotionBERT** (MIT, ICCV 2023) temporal 3D pose lifting. A dual-stream spatio-temporal transformer looks at up to **243 frames at once**, producing smooth, temporally consistent 3D motion, then fuses it with Gaussian splat depth for metric scale. This is the biggest quality upgrade in v2.
+- **Tier 1 — skeleton:** **MotionBERT** (MIT, ICCV 2023) temporal 3D pose lifting. A dual-stream spatio-temporal transformer looks at up to **243 frames at once**, producing smooth, temporally consistent 3D motion, then fuses it with Gaussian splat depth for metric scale.
 - **Tier 2 — mesh:** **HMR 2.0 / 4DHumans** (MIT) SMPL body mesh recovery + **PHALP** (MIT) 3D-aware identity tracking. Produces a textured 3D human body in the scene, not just a skeleton.
 - 2D pose detection defaults to **YOLO26-pose** (Ultralytics, 2026); **RTMPose** (Apache-2.0) is the AGPL-free alternative.
 
@@ -702,7 +720,9 @@ This project uses these open-source technologies:
 
 Some optional backends and models have different licenses. The most important restrictions:
 
-- **Apple SHARP** — non-commercial research only. For commercial use, select the **TripoSplat** (MIT) backend via `--splat-backend triposplat`.
+- **Apple SHARP** — non-commercial research only. For commercial use, select **TripoSplat** (MIT), **VGGT** (MIT code), or **DepthSplat** (MIT) via `--splat-backend triposplat|vggt|depthsplat`.
+- **LongSplat** (NVlabs) — check NVlabs terms before commercial use.
+- **VGGT model checkpoint** — CC-BY-NC (code is MIT, checkpoint is non-commercial).
 - **Ultralytics YOLO26-pose** — AGPL-3.0. For networked service deployments, open-source your service code or purchase an Ultralytics commercial license. Local desktop use does not trigger AGPL.
 - **SMPL body model** (needed by HMR 2.0) — registration required at [smplify.is.tue.mpg.de](https://smplify.is.tue.mpg.de).
 
@@ -715,4 +735,4 @@ See [NOTICE.md](NOTICE.md) for the full third-party license breakdown.
 
 ---
 
-**Splatline v2.0.0** — made with [Rerun](https://github.com/rerun-io/rerun), pluggable splat backends (SHARP, TripoSplat), and a tiered human pipeline (MotionBERT, HMR 2.0). MIT-licensed.
+**Splatline v2.0.0** — made with [Rerun](https://github.com/rerun-io/rerun), five reconstruction backends (SHARP, TripoSplat, VGGT, DepthSplat, LongSplat), and a tiered human pipeline (MotionBERT, HMR 2.0). MIT-licensed.
