@@ -4,14 +4,6 @@ Convert 2D videos and photos into interactive 3D scenes using pluggable Gaussian
 
 > **v2.0.0** is a complete rebuild focused on **2D-to-3D scene reconstruction quality**: three new state-of-the-art reconstruction backends (VGGT, DepthSplat, LongSplat) alongside SHARP and TripoSplat, a tiered human motion pipeline, and a FastAPI + SSE backend. v1 scripts keep working unchanged. See [CHANGELOG.md](CHANGELOG.md) for the full diff. Splatline itself is **MIT-licensed**; see [License](#-license) and [NOTICE.md](NOTICE.md) for third-party restrictions.
 
-### GitHub repository name
-
-On GitHub, set the repository name to **`splatline`**: *Settings → General → Repository name*. After renaming, point your local clone at the new URL, for example:
-
-```bash
-git remote set-url origin https://github.com/<your-username>/splatline.git
-```
-
 ## Demo Video
 
 ![Demo Video Preview](docs/assets/demo_preview.gif)
