@@ -82,6 +82,28 @@ python run_video_3d.py solid
 
 **Solid mesh mode** reconstructs a continuous triangle mesh from each frame's point cloud using voxel-based surface reconstruction (marching cubes), then projects the source video frame onto the mesh for accurate colors. Uses 768-voxel resolution (2.9M vertices per frame), bilinear color interpolation, and a 60/40 blend of source-image and point-cloud colors. The result is a solid, gap-free 3D surface with real video colors.
 
+### SLAM 3D Mapping (`run_slam_3d.py`)
+
+A monocular visual SLAM script that builds a 3D map of the scene while tracking the camera's trajectory through the video:
+
+```bash
+python run_slam_3d.py /path/to/video.mp4
+```
+
+**How it works:**
+- Extracts ORB features from each video frame (3000 features/frame)
+- Matches features between consecutive frames using Lowe's ratio test
+- Estimates camera pose via essential matrix decomposition (RANSAC)
+- Triangulates matched features into 3D world points
+- Accumulates camera trajectory and map points across keyframes
+- Visualizes everything in Rerun: camera path (yellow line), camera position (red dot), 3D map points (colored by source video), and matched features on the source frame
+
+**Output:**
+- Real-time Rerun visualization with timeline playback
+- PLY point cloud file (`<video_name>_slam_map.ply`) saved alongside the video
+
+No CUDA required — pure Python with OpenCV ORB features. Works on macOS (MPS/CPU). Processes ~120 frames in ~4 seconds.
+
 ---
 
 ## 🎯 For Non-Technical Users - Quick Start
