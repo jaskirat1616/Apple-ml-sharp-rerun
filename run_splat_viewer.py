@@ -127,7 +127,7 @@ def main():
     print(f"  Color range: {colors.min():.3f} - {colors.max():.3f} (mean {colors.mean():.3f})")
 
     # For large splat counts, subsample to keep Rerun responsive
-    MAX_SPLATS = 50000
+    MAX_SPLATS = 200000
     if len(positions) > MAX_SPLATS:
         print(f"  Subsampling to {MAX_SPLATS:,} splats (from {len(positions):,}) for performance...")
         idx = np.random.choice(len(positions), MAX_SPLATS, replace=False)
@@ -138,9 +138,9 @@ def main():
         if quats is not None:
             quats = quats[idx]
 
-    # Half-sizes for ellipsoids — scale up so they're visible
-    # SuperSplat uses 3x the exp(scale) for the ellipsoid radius
-    half_sizes = scales * 3.0
+    # Compute radii from splat scales — use the max axis scale
+    # This approximates the projected splat size (camera-facing disc)
+    radii = np.max(scales, axis=-1).astype(np.float32)
 
     # Build RGBA colors with opacity
     rgba = np.zeros((len(positions), 4), dtype=np.float32)
@@ -153,20 +153,16 @@ def main():
     rr.init("Splatline Splat Viewer")
     rr.spawn(memory_limit="2GiB", server_memory_limit="4GiB")
 
-    # Log the splats as oriented ellipsoids
+    # Log splats as camera-facing points with scale-based radii
+    # Points3D renders as screen-space circles (like projected splats)
     print("\nLogging to Rerun...")
-    kwargs = dict(
-        centers=np.ascontiguousarray(positions, dtype=np.float32),
-        half_sizes=np.ascontiguousarray(half_sizes, dtype=np.float32),
-        colors=np.ascontiguousarray(rgba, dtype=np.float32),
-        fill_mode=rr.components.FillMode.Solid,
+    rr.log("splats",
+        rr.Points3D(
+            positions=np.ascontiguousarray(positions, dtype=np.float32),
+            colors=np.ascontiguousarray(rgba, dtype=np.float32),
+            radii=np.ascontiguousarray(radii, dtype=np.float32),
+        )
     )
-    if quats is not None:
-        # Rerun expects quaternions as [x, y, z, w]
-        quats_xyzw = quats[:, [1, 2, 3, 0]].astype(np.float32)
-        kwargs['quaternions'] = np.ascontiguousarray(quats_xyzw)
-
-    rr.log("splats", rr.Ellipsoids3D(**kwargs))
 
     print(f"\nDone! {len(positions):,} oriented ellipsoids in Rerun.")
     print("Press Ctrl+C to exit.")
