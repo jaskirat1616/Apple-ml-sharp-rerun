@@ -28,6 +28,14 @@ VIEWER_HTML = r"""<!DOCTYPE html>
 <title>Splatline Splat Viewer</title>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
 <style>
 * { margin: 0; padding: 0; }
 body { overflow: hidden; background: #0a0a14; font-family: -apple-system, sans-serif; }
@@ -74,9 +82,8 @@ canvas { display: block; }
 <div id="info"><b>Splatline Splat Viewer</b> — drag to orbit · scroll to zoom · right-drag to pan</div>
 
 <script type="module">
-import * as THREE from 'https://unpkg.com/three@0.169.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.169.0/examples/jsm/controls/OrbitControls.js';
-import { GaussianSplatRenderer } from 'https://unpkg.com/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const loadingEl = document.getElementById('loading');
 const progressEl = document.getElementById('progress');
