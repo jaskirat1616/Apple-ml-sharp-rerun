@@ -104,6 +104,41 @@ python run_slam_3d.py /path/to/video.mp4
 
 No CUDA required — pure Python with OpenCV ORB features. Works on macOS (MPS/CPU). Processes ~120 frames in ~4 seconds.
 
+### Image-to-3D Solid Mesh (`run_image_3d.py`)
+
+Convert a single image into a super high-resolution solid 3D mesh:
+
+```bash
+# Default (1024 voxel resolution)
+python run_image_3d.py /path/to/photo.jpg
+
+# Maximum resolution (1536 voxels — ~10M+ vertices)
+python run_image_3d.py /path/to/photo.png --res 1536
+
+# Export only, no viewer
+python run_image_3d.py /path/to/photo.jpg --res 1024 --no-view
+
+# Custom output directory
+python run_image_3d.py /path/to/photo.jpg --output-dir my_3d_output
+```
+
+**Pipeline:**
+1. SHARP converts the image to 1.1M 3D Gaussian points
+2. Voxel-based surface reconstruction (marching cubes at 1024+ resolution)
+3. Bilinear color interpolation from source image + point cloud blend (60/40)
+4. Exports PLY and OBJ mesh files with vertex colors
+5. Visualizes in Rerun with pinhole camera + source image overlay
+
+**Resolution guide:**
+| `--res` | Vertices | Faces | Time | Memory |
+|---------|----------|-------|------|--------|
+| 512 | ~1.2M | ~2.4M | ~2s | ~1GB |
+| 768 | ~2.9M | ~5.8M | ~6s | ~2GB |
+| 1024 | ~5.1M | ~10.3M | ~13s | ~4GB |
+| 1536 | ~11M+ | ~22M+ | ~40s | ~8GB |
+
+At 1024 resolution, the mesh has 356K unique colors sampled from the source image via bilinear interpolation.
+
 ---
 
 ## 🎯 For Non-Technical Users - Quick Start
