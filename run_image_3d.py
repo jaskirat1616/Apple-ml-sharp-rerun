@@ -168,46 +168,27 @@ def reconstruct_solid_mesh(positions, colors, resolution=1024, dilation_iter=3):
 
 
 def project_colors_bilinear(verts, source_img, f_px, positions, colors):
-    """Project source image colors onto mesh vertices using bilinear interpolation.
+    """Get vertex colors from original SHARP point cloud colors.
 
-    Blends 60% bilinear-interpolated image colors with 40% point cloud colors
-    for maximum detail and smoothness.
+    Uses nearest-neighbor from the original point cloud to preserve
+    the exact colors output by SHARP — no modification, no blending.
 
     Args:
         verts: Mx3 array of mesh vertices
-        source_img: HxWx3 float32 array (RGB, 0-255)
-        f_px: Focal length in pixels
+        source_img: HxWx3 float32 array (RGB, 0-255) — unused, kept for API compat
+        f_px: Focal length in pixels — unused, kept for API compat
         positions: Nx3 array of original point cloud positions
         colors: Nx3 array of point cloud colors (0-1 range)
 
     Returns:
         Mx4 uint8 array of RGBA vertex colors
     """
-    from scipy.ndimage import map_coordinates
     from scipy.spatial import cKDTree
 
-    img_h, img_w = source_img.shape[:2]
-
-    # Project 3D vertices to 2D image coordinates
-    z = verts[:, 2].copy()
-    z[np.abs(z) < 1e-6] = 1e-6
-    u_f = f_px * verts[:, 0] / z + img_w / 2
-    v_f = f_px * verts[:, 1] / z + img_h / 2
-
-    # Bilinear interpolation for smooth colors
-    img_colors = np.zeros((len(verts), 3), dtype=np.float32)
-    for c in range(3):
-        img_colors[:, c] = map_coordinates(
-            source_img[:, :, c], [v_f, u_f], order=1, mode='reflect'
-        )
-
-    # Also get colors from nearest point cloud point (full detail)
+    # Use original SHARP point cloud colors — no modification
     color_tree = cKDTree(positions)
     _, nearest = color_tree.query(verts, k=1)
-    cloud_colors = (colors[nearest] * 255).astype(np.float32)
-
-    # Blend: 60% bilinear image + 40% point cloud for maximum detail
-    vertex_colors = (img_colors * 0.6 + cloud_colors * 0.4).clip(0, 255).astype(np.uint8)
+    vertex_colors = (colors[nearest] * 255).clip(0, 255).astype(np.uint8)
 
     # Add alpha
     vertex_colors_rgba = np.hstack([
@@ -462,8 +443,8 @@ def main():
         )
         print(f"  Reconstruction took {time.time() - t0:.1f}s")
 
-        # Step 4: Project colors from source image
-        print("\nProjecting colors from source image (bilinear interpolation)...")
+        # Step 4: Get colors from original SHARP point cloud
+        print("\nGetting colors from original SHARP point cloud...")
         t0 = time.time()
         colors_rgba = project_colors_bilinear(verts, source_img_f, f_px, positions, colors)
         unique_colors = len(np.unique(colors_rgba[:, :3], axis=0))

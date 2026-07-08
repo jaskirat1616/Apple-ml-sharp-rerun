@@ -228,7 +228,6 @@ def view_solid_in_rerun(gaussians_dir, frames_dir, fps):
     from scipy.spatial import cKDTree
     from scipy.ndimage import binary_fill_holes
     from skimage import measure
-    from sharp.utils import io as sharp_io
 
     ply_files = sorted(gaussians_dir.glob("*.ply"))
     print(f"\nLoading {len(ply_files)} PLY files into Rerun (solid mesh mode)...")
@@ -282,40 +281,11 @@ def view_solid_in_rerun(gaussians_dir, frames_dir, fps):
 
         print(f"{len(verts)} verts, {len(faces)} faces", end="  ")
 
-        # Project colors from source image using BILINEAR interpolation
-        # for smooth, high-quality color sampling (not blocky nearest-neighbor)
+        # Use original SHARP point cloud colors — no modification, no blending
         frame_path = frames_dir / f"{ply_path.stem}.png"
-        if frame_path.exists():
-            source_img = cv2.imread(str(frame_path))
-            source_img = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB).astype(np.float32)
-            img_h, img_w = source_img.shape[:2]
-            _, _, f_px = sharp_io.load_rgb(Path(frame_path))
-
-            z = verts[:, 2].copy()
-            z[np.abs(z) < 1e-6] = 1e-6
-            u_f = f_px * verts[:, 0] / z + img_w / 2
-            v_f = f_px * verts[:, 1] / z + img_h / 2
-
-            # Bilinear interpolation for smooth colors
-            from scipy.ndimage import map_coordinates
-            img_colors = np.zeros((len(verts), 3), dtype=np.float32)
-            for c in range(3):
-                img_colors[:, c] = map_coordinates(
-                    source_img[:, :, c], [v_f, u_f], order=1, mode='reflect'
-                )
-
-            # Also get colors from nearest point cloud point (full detail)
-            color_tree = cKDTree(positions)
-            _, nearest = color_tree.query(verts, k=1)
-            cloud_colors = (colors[nearest] * 255).astype(np.float32)
-
-            # Blend: 60% bilinear image + 40% point cloud for maximum detail
-            vertex_colors = (img_colors * 0.6 + cloud_colors * 0.4).clip(0, 255).astype(np.uint8)
-        else:
-            # Fallback: use point cloud colors only
-            color_tree = cKDTree(positions)
-            _, nearest = color_tree.query(verts, k=1)
-            vertex_colors = (colors[nearest] * 255).clip(0, 255).astype(np.uint8)
+        color_tree = cKDTree(positions)
+        _, nearest = color_tree.query(verts, k=1)
+        vertex_colors = (colors[nearest] * 255).clip(0, 255).astype(np.uint8)
 
         # Add alpha
         vertex_colors_rgba = np.hstack([
