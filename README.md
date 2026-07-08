@@ -1,6 +1,8 @@
 # Splatline
 
-Convert 2D videos and photos into interactive 3D scenes using Apple’s ML-SHARP and Rerun. **Splatline** is a toolkit for exploring Gaussian splat videos in 3D, with depth maps, navigation tools, pose overlays, and creative effects.
+Convert 2D videos and photos into interactive 3D scenes using pluggable Gaussian-splatting backends and Rerun. **Splatline** is a toolkit for exploring Gaussian splat videos in 3D, with depth maps, navigation tools, pose overlays, and creative effects.
+
+> **v2.0.0** is a complete rebuild: pluggable reconstruction backends (SHARP + TripoSplat), a tiered human pipeline (MotionBERT skeleton + HMR 2.0 SMPL mesh), and a FastAPI + SSE backend. v1 scripts keep working unchanged. See [CHANGELOG.md](CHANGELOG.md) for the full diff. Splatline itself is **MIT-licensed**; see [License](#-license) and [NOTICE.md](NOTICE.md) for third-party restrictions.
 
 ### GitHub repository name
 
@@ -15,6 +17,44 @@ git remote set-url origin https://github.com/<your-username>/splatline.git
 ![Demo Video Preview](docs/assets/demo_preview.gif)
 
 **[Click here to download the full demo video](docs/assets/demo_video.mov)** | [View thumbnail](docs/assets/demo_thumbnail.jpg)
+
+---
+
+## ✨ What's New in v2.0.0
+
+v2 keeps every v1 script working and adds a modern architecture on top.
+
+### Pluggable reconstruction backends
+
+A backend registry lets you swap the 3D reconstruction model without changing your workflow. On **first run**, Splatline shows a backend selector with license transparency; the choice persists in `~/.splatline/config.json`.
+
+- **SHARP** (Apple, non-commercial research) — the v1 default. Per-frame 3DGS from a single image.
+- **TripoSplat** (MIT, SIGGRAPH 2026) — fully open, commercial-safe single-image 3DGS.
+- Tracked: **LongSplat** (NVlabs, ICCV 2025), **SplineGS** (MIT, CVPR 2025), **DepthSplat** (MIT, CVPR 2025), **VGGT** (CVPR 2025 Best Paper).
+
+Select with `--splat-backend sharp|triposplat|depthsplat|longsplat`. See [docs/SPLAT_MODELS.md](docs/SPLAT_MODELS.md).
+
+### Tiered human pipeline
+
+v2 replaces per-frame depth-lifting with a tiered human reconstruction pipeline, selected with `--human-tier skeleton|mesh|both`.
+
+- **Tier 1 — skeleton:** **MotionBERT** (MIT, ICCV 2023) temporal 3D pose lifting. A dual-stream spatio-temporal transformer looks at up to **243 frames at once**, producing smooth, temporally consistent 3D motion, then fuses it with Gaussian splat depth for metric scale. This is the biggest quality upgrade in v2.
+- **Tier 2 — mesh:** **HMR 2.0 / 4DHumans** (MIT) SMPL body mesh recovery + **PHALP** (MIT) 3D-aware identity tracking. Produces a textured 3D human body in the scene, not just a skeleton.
+- 2D pose detection defaults to **YOLO26-pose** (Ultralytics, 2026); **RTMPose** (Apache-2.0) is the AGPL-free alternative.
+
+See [docs/ATHLETE_TWIN.md](docs/ATHLETE_TWIN.md).
+
+### FastAPI + SSE backend
+
+The v1 stdlib HTTP server is replaced by a FastAPI backend at [`ui/server.py`](ui/server.py) with Server-Sent Events for real-time progress streaming on long ML jobs, Pydantic validation, and auto OpenAPI docs at `/docs`.
+
+New endpoints: `/api/config`, `/api/backends`, `/api/tiers`, `/api/jobs/{id}/stream` (SSE). Start it with `python ui/server.py`.
+
+### Infrastructure
+
+- **ONNX Runtime** for inference optimization (INT8 pose quantization, 2-4x speedup).
+- **Hugging Face Hub** for versioned model download and caching (no re-downloads).
+- **YOLO26-pose** as the default 2D pose detector.
 
 ---
 
@@ -658,13 +698,21 @@ This project uses these open-source technologies:
 
 ## 📄 License
 
-**Splatline** builds on Apple’s ML-SHARP model and Rerun; it is an independent community toolkit, not an Apple product.
+**Splatline** is licensed under the **MIT License** — see [LICENSE](LICENSE). It builds on Apple's ML-SHARP model and Rerun; it is an independent community toolkit, not an Apple product.
+
+Some optional backends and models have different licenses. The most important restrictions:
+
+- **Apple SHARP** — non-commercial research only. For commercial use, select the **TripoSplat** (MIT) backend via `--splat-backend triposplat`.
+- **Ultralytics YOLO26-pose** — AGPL-3.0. For networked service deployments, open-source your service code or purchase an Ultralytics commercial license. Local desktop use does not trigger AGPL.
+- **SMPL body model** (needed by HMR 2.0) — registration required at [smplify.is.tue.mpg.de](https://smplify.is.tue.mpg.de).
+
+See [NOTICE.md](NOTICE.md) for the full third-party license breakdown.
 
 **Third-party licenses:**
 - **Rerun**: Apache-2.0 License
 - **PyTorch**: BSD-style License
-- **Other dependencies**: See their respective licenses
+- **Other dependencies**: See [NOTICE.md](NOTICE.md)
 
 ---
 
-**Splatline** — made with [Rerun](https://github.com/rerun-io/rerun) and [Apple ML-SHARP](https://github.com/apple/ml-sharp)
+**Splatline v2.0.0** — made with [Rerun](https://github.com/rerun-io/rerun), pluggable splat backends (SHARP, TripoSplat), and a tiered human pipeline (MotionBERT, HMR 2.0). MIT-licensed.
