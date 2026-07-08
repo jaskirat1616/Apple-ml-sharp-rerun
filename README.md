@@ -66,6 +66,22 @@ New endpoints: `/api/config`, `/api/backends`, `/api/tiers`, `/api/jobs/{id}/str
 - **Hugging Face Hub** for versioned model download and caching (no re-downloads).
 - **YOLO26-pose** as the default 2D pose detector.
 
+### 3D Video Viewer (`run_video_3d.py`)
+
+A standalone script that runs the full pipeline — extract frames, convert to 3DGS with SHARP, and view in Rerun — with two viewing modes:
+
+```bash
+# Point cloud mode (original splats)
+python run_video_3d.py
+
+# Solid mesh mode (gap-filled surface with video colors)
+python run_video_3d.py solid
+```
+
+**Point cloud mode** renders each frame's Gaussian splats as colored 3D points with adjustable size and brightness.
+
+**Solid mesh mode** reconstructs a continuous triangle mesh from each frame's point cloud using voxel-based surface reconstruction (marching cubes), then projects the source video frame onto the mesh for accurate colors. Uses 768-voxel resolution (2.9M vertices per frame), bilinear color interpolation, and a 60/40 blend of source-image and point-cloud colors. The result is a solid, gap-free 3D surface with real video colors.
+
 ---
 
 ## 🎯 For Non-Technical Users - Quick Start
