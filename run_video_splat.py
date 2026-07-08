@@ -26,18 +26,25 @@ import time
 from pathlib import Path
 
 
-def convert_to_standard_ply(input_path, output_path):
-    """Convert SHARP PLY to standard 3DGS PLY (strip extra elements)."""
+def convert_to_standard_ply(input_path, output_path, max_splats=200000):
+    """Convert SHARP PLY to standard 3DGS PLY, stripping extra elements
+    and subsampling to max_splats for fast browser loading."""
     from plyfile import PlyData, PlyElement
+    import numpy as np
 
     ply = PlyData.read(str(input_path))
-
-    if len(ply.elements) == 1:
-        shutil.copy2(input_path, output_path)
-        return
-
     vertex = ply['vertex']
-    new_vertex = PlyElement.describe(vertex.data, 'vertex')
+    data = vertex.data
+
+    # Subsample by opacity — keep the most visible splats
+    if len(data) > max_splats and 'opacity' in data.dtype.names:
+        opacities = data['opacity']
+        # Convert logit opacity to [0,1]
+        ops = 1.0 / (1.0 + np.exp(-opacities))
+        top_idx = np.argsort(ops)[-max_splats:]
+        data = data[top_idx]
+
+    new_vertex = PlyElement.describe(data, 'vertex')
     new_ply = PlyData([new_vertex], text=False, byte_order='<')
     new_ply.write(str(output_path))
 
@@ -250,17 +257,7 @@ function parsePly(arrayBuffer) {
   const hasRGB = 'red' in propOffsets;
   const SH_C0 = 0.28209479177387814;
 
-  // Subsample if too many splats
-  const MAX_SPLATS = 200000;
-  let indices = null;
-  let count = vertexCount;
-  if (count > MAX_SPLATS) {
-    // Sample every Nth vertex (fast, no sorting needed)
-    const step = Math.ceil(count / MAX_SPLATS);
-    indices = [];
-    for (let i = 0; i < count; i += step) indices.push(i);
-    count = indices.length;
-  }
+  const count = vertexCount;
 
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
@@ -268,8 +265,7 @@ function parsePly(arrayBuffer) {
   const opacities = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    const vi = indices ? indices[i] : i;
-    const base = headerEnd + vi * stride;
+    const base = headerEnd + i * stride;
 
     positions[i * 3]     = data.getFloat32(base + propOffsets['x'], true);
     positions[i * 3 + 1] = data.getFloat32(base + propOffsets['y'], true);
@@ -396,16 +392,18 @@ async function loadFrame(idx) {
 
   const url = `frames/frame_${String(idx).padStart(4, '0')}.ply`;
   console.log(`Loading frame ${idx}: ${url}`);
+  pctEl.textContent = `Loading frame ${idx}...`;
 
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to load frame ${idx}: ${response.status}`);
   const buf = await response.arrayBuffer();
+  console.log(`Frame ${idx}: ${(buf.byteLength / 1e6).toFixed(1)} MB downloaded`);
   const splatData = parsePly(buf);
+  console.log(`Frame ${idx}: ${splatData.count} splats parsed`);
 
   // Cache management
   frameCache.set(idx, splatData);
   if (frameCache.size > MAX_CACHE) {
-    // Remove oldest entry (lowest frame number that isn't current)
     const keys = Array.from(frameCache.keys()).sort((a, b) => a - b);
     for (const k of keys) {
       if (k !== idx && frameCache.size > MAX_CACHE) {
@@ -415,6 +413,7 @@ async function loadFrame(idx) {
   }
 
   showFrame(splatData);
+  pctEl.textContent = '';
 }
 
 function updateTimeline() {
@@ -586,7 +585,7 @@ def main():
     # Fresh viewer directory
     viewer_dir = Path("/tmp/splatline_video_viewer")
     if viewer_dir.exists():
-        shutil.rmtree(viewer_dir)
+        shutil.rmtree(viewer_dir, ignore_errors=True)
     viewer_dir.mkdir(parents=True, exist_ok=True)
 
     # Write HTML
