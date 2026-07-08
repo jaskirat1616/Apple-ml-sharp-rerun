@@ -105,11 +105,14 @@ def convert_image_to_gaussians(image_path, output_dir, device="mps", internal_si
 def load_gaussian_cloud(ply_path):
     """Load a PLY and return positions, colors, scales, opacities as numpy arrays."""
     from sharp.utils.gaussians import load_ply
+    from sharp.utils import color_space as cs_utils
     gaussians, metadata = load_ply(Path(ply_path))
     positions = gaussians.mean_vectors.cpu().numpy().squeeze()
     colors = gaussians.colors.cpu().numpy().squeeze()
     scales = gaussians.singular_values.cpu().numpy().squeeze()
     opacities = gaussians.opacities.cpu().numpy().squeeze()
+    # SHARP stores colors in linearRGB — convert to sRGB for correct display
+    colors = cs_utils.linearRGB2sRGB(torch.from_numpy(colors).float()).numpy()
     return positions, colors, scales, opacities
 
 

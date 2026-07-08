@@ -127,6 +127,7 @@ def view_in_rerun(gaussians_dir, frames_dir, fps):
     """View the 3D Gaussian sequence in Rerun (original point-cloud style)."""
     import rerun as rr
     from sharp.utils.gaussians import load_ply
+    from sharp.utils import color_space as cs_utils
 
     ply_files = sorted(gaussians_dir.glob("*.ply"))
     print(f"\nLoading {len(ply_files)} PLY files into Rerun...")
@@ -143,6 +144,10 @@ def view_in_rerun(gaussians_dir, frames_dir, fps):
         positions = gaussians.mean_vectors.cpu().numpy().squeeze()
         colors = gaussians.colors.cpu().numpy().squeeze()
         scales = gaussians.singular_values.cpu().numpy().squeeze()
+
+        # SHARP stores colors in linearRGB — convert to sRGB for correct display
+        colors_t = torch.from_numpy(colors).float()
+        colors = cs_utils.linearRGB2sRGB(colors_t).numpy()
 
         # Filter low-opacity points
         opacities = gaussians.opacities.cpu().numpy().squeeze()
@@ -189,11 +194,14 @@ def view_in_rerun(gaussians_dir, frames_dir, fps):
 def _load_gaussian_cloud(ply_path):
     """Load a PLY and return positions, colors, scales, opacities as numpy arrays."""
     from sharp.utils.gaussians import load_ply
+    from sharp.utils import color_space as cs_utils
     gaussians, metadata = load_ply(Path(ply_path))
     positions = gaussians.mean_vectors.cpu().numpy().squeeze()
     colors = gaussians.colors.cpu().numpy().squeeze()
     scales = gaussians.singular_values.cpu().numpy().squeeze()
     opacities = gaussians.opacities.cpu().numpy().squeeze()
+    # SHARP stores colors in linearRGB — convert to sRGB for correct display
+    colors = cs_utils.linearRGB2sRGB(torch.from_numpy(colors).float()).numpy()
     return positions, colors, scales, opacities
 
 
