@@ -151,6 +151,9 @@ def main():
     # Write settings.json
     (viewer_dir / "settings.json").write_text(json.dumps(DEFAULT_SETTINGS, indent=2))
 
+    # Write a minimal favicon to avoid 404
+    (viewer_dir / "favicon.ico").write_bytes(b'')
+
     # Start local web server with correct MIME types
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
