@@ -19,27 +19,57 @@ import torch
 
 
 def load_ply_splat(ply_path):
-    """Load a PLY file and return splat data with sRGB colors."""
-    from sharp.utils.gaussians import load_ply
-    from sharp.utils import color_space as cs_utils
+    """Load a PLY file and return splat data with sRGB colors.
 
-    gaussians, metadata = load_ply(Path(ply_path))
+    Supports both SHARP 3DGS format (f_dc_0/1/2, opacity, scale, rot) and
+    simple point cloud format (red/green/blue).
+    """
+    from plyfile import PlyData
+    import numpy as np
 
-    positions = gaussians.mean_vectors.cpu().numpy().squeeze()
-    colors = gaussians.colors.cpu().numpy().squeeze()
-    scales = gaussians.singular_values.cpu().numpy().squeeze()
-    opacities = gaussians.opacities.cpu().numpy().squeeze()
+    ply = PlyData.read(str(ply_path))
+    vertex = ply['vertex']
+    props = [p.name for p in vertex.properties]
 
-    # SHARP stores colors in linearRGB — convert to sRGB for correct display
-    colors = cs_utils.linearRGB2sRGB(torch.from_numpy(colors).float()).numpy()
+    # Positions
+    positions = np.stack([vertex['x'], vertex['y'], vertex['z']], axis=-1).astype(np.float32)
 
-    # Filter low-opacity points
-    if opacities.ndim > 0:
+    # Colors — handle both SHARP (f_dc) and simple (red/green/blue) formats
+    if 'f_dc_0' in props:
+        # SHARP 3DGS format — SH coefficients, convert to sRGB
+        SH_C0 = 0.28209479177387814
+        colors = np.stack([
+            0.5 + SH_C0 * vertex['f_dc_0'],
+            0.5 + SH_C0 * vertex['f_dc_1'],
+            0.5 + SH_C0 * vertex['f_dc_2'],
+        ], axis=-1).astype(np.float32)
+    elif 'red' in props:
+        # Simple point cloud format — already sRGB
+        colors = np.stack([
+            vertex['red'].astype(np.float32) / 255.0,
+            vertex['green'].astype(np.float32) / 255.0,
+            vertex['blue'].astype(np.float32) / 255.0,
+        ], axis=-1)
+    else:
+        colors = np.full((len(positions), 3), 0.8, dtype=np.float32)
+
+    # Scales
+    if 'scale_0' in props:
+        scales = np.stack([
+            np.exp(vertex['scale_0']),
+            np.exp(vertex['scale_1']),
+            np.exp(vertex['scale_2']),
+        ], axis=-1).astype(np.float32)
+    else:
+        scales = np.full((len(positions), 3), 0.01, dtype=np.float32)
+
+    # Opacity filter
+    if 'opacity' in props:
+        opacities = 1.0 / (1.0 + np.exp(-vertex['opacity'].astype(np.float32)))
         mask = opacities > 0.1
         positions = positions[mask]
         colors = colors[mask]
-        if scales.ndim > 1 and scales.shape[0] == len(opacities):
-            scales = scales[mask]
+        scales = scales[mask]
 
     return positions, colors, scales
 
