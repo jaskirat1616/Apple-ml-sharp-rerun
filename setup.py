@@ -11,8 +11,8 @@ long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
     name="splatline",
-    version="0.1.0",
-    description="Splatline: Rerun-based visualization and navigation for 3D Gaussian splats (ML-SHARP)",
+    version="2.0.0",
+    description="Splatline v2: Video-to-3D reconstruction with temporal human motion recovery",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Splatline contributors",
@@ -35,15 +35,17 @@ setup(
         ],
     },
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
+        "License :: OSI Approved :: MIT License",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Visualization",
+        "Topic :: Scientific/Engineering :: Image Recognition",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
     ],
 )
 

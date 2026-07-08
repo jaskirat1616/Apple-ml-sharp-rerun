@@ -92,5 +92,12 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Node / Electron build artifacts
+node_modules/
+dist-electron/
+
+# UI run outputs
+ui_runs/
+
 # Optional local notes (not part of the library)
 COOL_FEATURES.md

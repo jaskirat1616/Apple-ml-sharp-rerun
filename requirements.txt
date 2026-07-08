@@ -1,8 +1,42 @@
-rerun-sdk>=0.15.0
+# Splatline v2 — Core dependencies
+# Install: pip install -r requirements.txt
+
+# Reconstruction
+rerun-sdk>=0.23.0
 numpy>=1.20.0
 pillow>=8.0.0
 opencv-python>=4.5.0
 scipy>=1.7.0
-torch>=1.9.0
+torch>=2.0.0
 tqdm>=4.60.0
 
+# Backend server (v2)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+sse-starlette>=2.1.0
+
+# Model distribution
+huggingface-hub>=0.23.0
+
+# Inference optimization (optional but recommended)
+onnxruntime>=1.17.0
+
+# Pose detection
+ultralytics>=8.4.0
+
+# Optional: GPU-accelerated video I/O (drop-in OpenCV replacement)
+# ffmpegcv>=0.3.8
+
+# Optional: Gaussian Splatting rendering in Python
+# gsplat>=1.0.0
+
+# Optional: SMPL mesh recovery (HMR 2.0 / 4DHumans)
+# Install from source: git clone https://github.com/shubham-goel/4d-humans
+# phalp  # pip install phalp
+
+# Optional: Temporal 3D pose lifting (MotionBERT)
+# Install from source: git clone https://github.com/Walter0807/MotionBERT
+
+# Optional: TripoSplat backend (MIT-licensed alternative to SHARP)
+# Install from source: git clone https://github.com/VAST-AI-Research/TripoSplat

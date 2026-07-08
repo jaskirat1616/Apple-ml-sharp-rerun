@@ -1,6 +1,80 @@
 # Quick Start Guide
 
-## 🚀 Getting Started in 30 Seconds
+## 🚀 v2 in 60 Seconds
+
+Splatline v2.0.0 adds a pluggable backend registry, a tiered human pipeline, and a FastAPI + SSE backend. v1 commands still work unchanged.
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+This installs the v2 core: FastAPI + uvicorn + sse-starlette (backend server), Hugging Face Hub (model caching), ONNX Runtime (inference optimization), and Ultralytics (YOLO26-pose). Optional backends (TripoSplat, MotionBERT, HMR 2.0) install from source — see `requirements.txt` comments.
+
+### 2. First-Run Backend Selection
+
+On first run, Splatline prompts you to pick a reconstruction backend. The choice persists in `~/.splatline/config.json`.
+
+- **`sharp`** — Apple SHARP, non-commercial research only (default for research).
+- **`triposplat`** — MIT-licensed, fully open, commercial-safe.
+
+You can skip the prompt by passing `--splat-backend` directly (see step 3).
+
+### 3. Run an Analysis with the v2 Flags
+
+```bash
+# SHARP backend + MotionBERT skeleton tier (v2 defaults)
+python scripts/sports/analyze_athlete_twin.py training.mp4 \
+  --splat-backend sharp \
+  --human-tier skeleton \
+  --device mps \
+  --view
+```
+
+```bash
+# TripoSplat (MIT, commercial-safe) + full SMPL mesh via HMR 2.0
+python scripts/sports/analyze_athlete_twin.py training.mp4 \
+  --splat-backend triposplat \
+  --human-tier mesh \
+  --device mps \
+  --view
+```
+
+New v2 flags:
+
+| Flag | Choices | Default | Notes |
+| --- | --- | --- | --- |
+| `--splat-backend` | `sharp`, `triposplat`, `depthsplat`, `longsplat` | `sharp` | `sharp` is non-commercial; `triposplat` is MIT. |
+| `--human-tier` | `skeleton`, `mesh`, `both` | `skeleton` | `skeleton`=MotionBERT, `mesh`=HMR 2.0 SMPL, `both`=both. |
+
+See [docs/ATHLETE_TWIN.md](docs/ATHLETE_TWIN.md) for the full tiered pipeline docs and [docs/SPLAT_MODELS.md](docs/SPLAT_MODELS.md) for the backend registry.
+
+### 4. Start the FastAPI Backend (Optional)
+
+```bash
+python ui/server.py
+```
+
+The v2 backend replaces the v1 stdlib HTTP server with FastAPI + Server-Sent Events for real-time progress streaming on long ML jobs. Auto OpenAPI docs are at `http://localhost:8000/docs`.
+
+Key endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/config` | Get current Splatline config (backend, tier) |
+| `POST` | `/api/config` | Update config |
+| `GET` | `/api/backends` | List available reconstruction backends |
+| `GET` | `/api/tiers` | List available human pipeline tiers |
+| `POST` | `/api/jobs` | Create a new analysis job (multipart upload) |
+| `GET` | `/api/jobs/{id}` | Get job status + outputs |
+| `GET` | `/api/jobs/{id}/stream` | SSE stream of live logs |
+
+---
+
+## 🚀 Getting Started in 30 Seconds (v1)
+
+The v1 commands below still work unchanged.
 
 ### 1. Install Dependencies
 

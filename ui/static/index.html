@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Splatline Athlete Twin</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Splatline</p>
+            <h1>Athlete Twin</h1>
+          </div>
+          <div class="run-state" id="runState">Idle</div>
+        </header>
+
+        <section class="node-board" aria-label="Athlete Twin workflow">
+          <article class="node active" id="nodeUpload">
+            <div class="node-head">
+              <span class="node-index">01</span>
+              <span class="node-title">Upload</span>
+            </div>
+            <label class="drop-zone" id="dropZone">
+              <input id="videoInput" type="file" accept="video/*" />
+              <span id="dropText">Drop video or choose file</span>
+            </label>
+            <p class="node-subtext" id="fileMeta">No video selected</p>
+          </article>
+
+          <div class="connector"></div>
+
+          <article class="node" id="nodeConfig">
+            <div class="node-head">
+              <span class="node-index">02</span>
+              <span class="node-title">Configure</span>
+            </div>
+            <div class="field-grid">
+              <label>
+                Device
+                <select id="device">
+                  <option value="default">Auto</option>
+                  <option value="mps">Apple MPS</option>
+                  <option value="cuda">CUDA</option>
+                  <option value="cpu">CPU</option>
+                </select>
+              </label>
+              <label>
+                Pose model
+                <select id="poseModel">
+                  <option value="yolo26x-pose.pt">YOLO26x Pose</option>
+                  <option value="yolo26l-pose.pt">YOLO26l Pose</option>
+                  <option value="yolo26m-pose.pt">YOLO26m Pose</option>
+                  <option value="yolo26s-pose.pt">YOLO26s Pose</option>
+                  <option value="yolo26n-pose.pt">YOLO26n Pose</option>
+                </select>
+              </label>
+              <label>
+                Height m
+                <input id="athleteHeight" type="number" min="0.5" max="2.5" step="0.01" value="1.75" />
+              </label>
+              <label>
+                Max frames
+                <input id="maxFrames" type="number" min="1" step="1" placeholder="All" />
+              </label>
+              <label>
+                Extract skip
+                <input id="extractSkip" type="number" min="1" step="1" value="1" />
+              </label>
+              <label>
+                Analyze skip
+                <input id="analysisSkip" type="number" min="1" step="1" value="1" />
+              </label>
+            </div>
+            <label class="check-row">
+              <input id="openRerun" type="checkbox" checked />
+              <span>Open 3D Rerun after processing</span>
+            </label>
+            <button class="primary" id="runButton" disabled>Run Athlete Twin</button>
+          </article>
+
+          <div class="connector"></div>
+
+          <article class="node" id="nodeProcess">
+            <div class="node-head">
+              <span class="node-index">03</span>
+              <span class="node-title">Process</span>
+            </div>
+            <div class="progress-shell">
+              <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <p class="node-subtext" id="processText">Waiting for a run</p>
+            <p class="node-subtext" id="rerunText">Rerun will open after successful processing.</p>
+          </article>
+
+          <div class="connector"></div>
+
+          <article class="node" id="nodeOutputs">
+            <div class="node-head">
+              <span class="node-index">04</span>
+              <span class="node-title">Outputs</span>
+            </div>
+            <div class="downloads" id="downloads">
+              <span>No outputs yet</span>
+            </div>
+          </article>
+        </section>
+
+        <section class="review-grid">
+          <article class="panel video-panel">
+            <div class="panel-head">
+              <h2>Video</h2>
+              <span id="videoStatus">Preview</span>
+            </div>
+            <video id="videoPreview" controls playsinline></video>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <h2>Metrics</h2>
+              <span id="metricStatus">CSV chart</span>
+            </div>
+            <canvas id="metricChart" width="900" height="360"></canvas>
+          </article>
+
+          <article class="panel report-panel">
+            <div class="panel-head">
+              <h2>Report</h2>
+              <span id="reportStatus">Markdown</span>
+            </div>
+            <div class="report" id="report">Run analysis to generate the sport-science report.</div>
+          </article>
+
+          <article class="panel log-panel">
+            <div class="panel-head">
+              <h2>Logs</h2>
+              <span id="logStatus">Live</span>
+            </div>
+            <pre id="logs"></pre>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
