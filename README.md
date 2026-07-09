@@ -161,6 +161,51 @@ python run_splat_viewer.py output_frame_000000_3d/frame_000000_points.ply
 
 No CUDA required — runs on macOS (MPS/CPU). No web browser needed.
 
+### Electron Desktop Video Player (`run_video_electron.py`)
+
+A native desktop app that plays 3D Gaussian splat sequences side-by-side with the original 2D source video, using the SuperSplat editor's GPU-accelerated renderer for true splat rendering (not point clouds).
+
+```bash
+# Launch the Electron viewer for an existing 3D output directory
+python run_video_electron.py --output-dir output_grok_3d
+
+# Or set environment variables
+SPLATLINE_VIDEO=1 SPLATLINE_OUTPUT_DIR=output_grok_3d npx electron .
+```
+
+**Features:**
+- **True Gaussian splat rendering** — uses the SuperSplat (PlayCanvas) engine for GPU-accelerated splat compositing, not point clouds
+- **2D video side-by-side** — the original source MP4 plays at native 24fps alongside the 3D view, synced to the timeline
+- **Smooth timeline playback** — play/pause/loop/scrub through 3D frames with real-time preload progress
+- **On-demand frame loading** — frames are fetched via HTTP as needed (not all loaded into memory), preventing OOM on large sequences
+- **Look-ahead preloading** — next 3 frames are preloaded during playback for smooth transitions
+- **Drift-based 2D sync** — the 2D video plays continuously at native FPS and only re-syncs if it drifts >0.3s from the 3D timeline
+
+**How it works:**
+1. A static HTTP server serves the SuperSplat editor and PLY frame files
+2. The Electron renderer loads the editor, which plays the PLY sequence using its built-in timeline
+3. Each frame's gaussian data is swapped in-place on a persistent entity (preserving camera transform)
+4. The 2D video panel is positioned bottom-left, above the timeline/status bar
+
+**Requirements:**
+- Node.js and npm (for Electron)
+- `npm install` in the project root to install Electron and dependencies
+- Pre-existing 3D output (from `run_video_3d.py` or `run_video_splat.py`)
+
+### SuperSplat Editor Video Viewer (`run_video_splat.py`)
+
+Plays 3D Gaussian splat sequences in the SuperSplat editor running in a browser, with on-demand frame loading and preloading for smooth playback.
+
+```bash
+# View a 3D output directory in the browser-based SuperSplat editor
+python run_video_splat.py --output-dir output_grok_3d
+
+# Limit the number of frames
+python run_video_splat.py --output-dir output_grok_3d --max-frames 30
+```
+
+This is the web-based version of the Electron viewer — same rendering engine, but runs in a browser tab instead of a desktop window.
+
 ---
 
 ## 🎯 For Non-Technical Users - Quick Start
@@ -486,29 +531,56 @@ splatline/
 │   │   ├── build_navigation_map.py
 │   │   ├── extract_slam_data.py
 │   │   └── demo_navigation.py
+│   ├── sports/                # Sports analytics
+│   │   └── analyze_athlete_twin.py
 │   └── creative/              # Creative effects
 │       ├── apply_depth_effects.py
 │       ├── compose_3d_scenes.py
 │       └── create_camera_path.py
 ├── utils/                      # Reusable utility modules
+│   ├── backends/              # 3D reconstruction backends
+│   │   ├── depthsplat_backend.py
+│   │   ├── longsplat_backend.py
+│   │   ├── vggt_backend.py
+│   │   └── __init__.py
+│   ├── human/                 # Human pose/mesh pipeline
+│   │   ├── hmr2.py           # HMR 2.0 body mesh
+│   │   ├── motionbert.py     # MotionBERT 3D pose
+│   │   └── tracking.py       # PHALP tracking
 │   ├── depth_rendering.py     # Depth map rendering
 │   ├── frame_processing.py    # Frame processing
 │   ├── navigation.py          # Navigation algorithms
 │   ├── pathfinding.py         # Pathfinding
 │   ├── visualization.py       # Viewer setup
+│   ├── splat_models.py        # Backend registry
+│   ├── splatline_config.py    # Config management
 │   ├── config.py              # Configuration
 │   ├── io_utils.py            # File I/O
 │   └── geometry.py            # 3D geometry
+├── electron/                   # Electron desktop app
+│   ├── main.ts                # Main Electron process
+│   ├── video-main.ts          # Video player Electron entry
+│   └── preload.ts             # Preload script
+├── src/                        # React + Vite frontend
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── styles.css
 ├── examples/                   # Example scripts
 ├── tests/                      # Test scripts
-├── configs/                    # Configuration files
-├── data/                       # Sample data
+├── docs/                       # Documentation
+│   ├── ATHLETE_TWIN.md
+│   ├── SPLAT_MODELS.md
+│   └── UI.md
 │
 ├── run_video_3d.py             # ⭐ Video → 3D (point cloud or solid mesh)
 ├── run_image_3d.py             # ⭐ Image → high-res solid 3D mesh
 ├── run_slam_3d.py              # ⭐ Monocular SLAM 3D mapping
 ├── run_splat_viewer.py         # ⭐ View any PLY as splats in Rerun
-└── ui/server.py                # FastAPI + SSE backend
+├── run_video_splat.py          # ⭐ SuperSplat editor video viewer (web)
+├── run_video_electron.py       # ⭐ Electron desktop video player
+├── ui/server.py                # FastAPI + SSE backend
+├── package.json                # Node.js / Electron config
+└── requirements.txt            # Python dependencies
 ```
 
 ---

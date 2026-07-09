@@ -144,17 +144,35 @@ const SEQUENCE_LOADER_JS = `
             ev.fire('timeline.setFrameRate', manifest.fps);
             ev.fire('timeline.setLoop', true);
 
-            // Sync 2D video to 3D timeline — let the video play continuously
-            // at native 24fps for smooth playback. Only re-sync if it drifts
-            // too far from the 3D timeline position.
+            // Sync 2D video to 3D timeline.
+            // The 3D timeline advances at fps=8 (24/3). Each 3D frame corresponds
+            // to a specific time in the 2D video: t = frame * frameSkip / sourceFps.
+            // The 2D video plays continuously at native 24fps for smoothness.
+            // We re-sync only on large drift (>0.3s) or when 3D playback pauses/scrubs.
             if (manifest.has2d && video2d) {
                 video2d.play().catch(() => {});
+                let is3dPlaying = false;
+
+                ev.on('timeline.playing', (playing) => {
+                    is3dPlaying = playing;
+                    if (playing) {
+                        video2d.play().catch(() => {});
+                    } else {
+                        video2d.pause();
+                    }
+                });
+
                 ev.on('timeline.frame', (frame) => {
                     if (!video2d) return;
                     const targetT = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
-                    // Only re-sync if drift > 0.3s (avoids stutter from constant seeking)
-                    if (Math.abs(video2d.currentTime - targetT) > 0.3) {
+                    if (!is3dPlaying) {
+                        // Paused/scrubbing: seek exactly
                         video2d.currentTime = targetT;
+                    } else {
+                        // Playing: only re-sync if drift > 0.3s
+                        if (Math.abs(video2d.currentTime - targetT) > 0.3) {
+                            video2d.currentTime = targetT;
+                        }
                     }
                 });
             }
@@ -208,7 +226,7 @@ const getPythonPath = () => {
   return process.platform === "win32" ? "python" : "python3";
 };
 
-const prepareViewer = (outputDir: string, maxFrames: number | null) => {
+const prepareViewer = async (outputDir: string, maxFrames: number | null) => {
   const gaussiansDir = path.join(outputDir, "gaussians");
   const frames2dDir = path.join(outputDir, "frames");
 
@@ -253,14 +271,157 @@ const prepareViewer = (outputDir: string, maxFrames: number | null) => {
     }
   }
 
-  // Copy PLY frames
+  // Subsample PLY frames for smooth real-time playback.
+  // Full-res PLYs are 63MB/frame with 1.18M splats — too slow for 8fps swapping.
+  // 600K splats (~32MB) gives a good balance: ~2x faster than full-res while
+  // preserving visual quality. Uses voxel-grid downsampling to maintain spatial
+  // coverage (not just highest-opacity, which creates holes).
   const framesDir = path.join(viewerDir, "frames");
   mkdirSync(framesDir, { recursive: true });
-  for (let i = 0; i < plyFiles.length; i++) {
-    copyFileSync(
-      path.join(gaussiansDir, plyFiles[i]),
-      path.join(framesDir, `frame_${String(i).padStart(4, "0")}.ply`)
+
+  const MAX_SPLATS = 600000;
+  const pythonPath = getPythonPath();
+  const subsampleScript = path.join(viewerDir, "_subsample.py");
+  writeFileSync(subsampleScript, `
+import sys, numpy as np
+
+def subsample_ply(in_path, out_path, max_splats):
+    with open(in_path, 'rb') as f:
+        header = b''
+        while True:
+            line = f.readline()
+            header += line
+            if b'end_header' in line:
+                break
+        # Parse header: only count properties under 'element vertex'
+        vertex_count = 0
+        props = []
+        current_element = None
+        for line in header.split(b'\\n'):
+            line = line.strip()
+            if line.startswith(b'element '):
+                current_element = line.split()[1]
+                if current_element == b'vertex':
+                    vertex_count = int(line.split()[-1])
+            elif line.startswith(b'property') and current_element == b'vertex':
+                props.append(line)
+        # Determine property sizes
+        fmt_map = {'float': 4, 'uchar': 1, 'uint': 4, 'ushort': 2, 'int': 4, 'short': 2}
+        prop_sizes = []
+        for p in props:
+            parts = p.split()
+            ptype = parts[1].decode()
+            prop_sizes.append(fmt_map.get(ptype, 4))
+        vertex_size = sum(prop_sizes)
+        data = f.read(vertex_count * vertex_size)
+        # Read remaining data (extrinsic, intrinsic, etc.)
+        extra_data = f.read()
+
+    if vertex_count <= max_splats:
+        with open(out_path, 'wb') as f:
+            f.write(header)
+            f.write(data)
+            f.write(extra_data)
+        return vertex_count
+
+    # Voxel-grid + opacity hybrid subsampling: preserves spatial coverage
+    # (no holes) while keeping the most opaque splats within each voxel.
+    prop_names = []
+    for p in props:
+        parts = p.split()
+        prop_names.append(parts[-1].decode() if len(parts) >= 3 else '')
+
+    x_idx = next((i for i, n in enumerate(prop_names) if n in ('x', 'pos_x')), 0)
+    y_idx = next((i for i, n in enumerate(prop_names) if n in ('y', 'pos_y')), 1)
+    z_idx = next((i for i, n in enumerate(prop_names) if n in ('z', 'pos_z')), 2)
+    opacity_idx = next((i for i, n in enumerate(prop_names) if 'opacity' in n), None)
+
+    arr = np.frombuffer(data, dtype=np.uint8).reshape(-1, vertex_size)
+
+    x_off = sum(prop_sizes[:x_idx])
+    y_off = sum(prop_sizes[:y_idx])
+    z_off = sum(prop_sizes[:z_idx])
+    xs = arr[:, x_off:x_off+4].copy().view(np.float32).flatten()
+    ys = arr[:, y_off:y_off+4].copy().view(np.float32).flatten()
+    zs = arr[:, z_off:z_off+4].copy().view(np.float32).flatten()
+
+    if opacity_idx is not None:
+        o_off = sum(prop_sizes[:opacity_idx])
+        opacities = arr[:, o_off:o_off+4].copy().view(np.float32).flatten()
+        opacities = 1.0 / (1.0 + np.exp(-opacities))
+    else:
+        opacities = np.ones(vertex_count, dtype=np.float32)
+
+    coords = np.column_stack([xs, ys, zs])
+    bbox_min = coords.min(axis=0)
+    bbox_max = coords.max(axis=0)
+    bbox_size = bbox_max - bbox_min
+    bbox_size[bbox_size == 0] = 1.0
+
+    volume = np.prod(bbox_size)
+    voxel_size = (volume / max_splats) ** (1.0 / 3.0)
+    voxel_size = max(voxel_size, 1e-6)
+
+    voxel_indices = np.floor((coords - bbox_min) / voxel_size).astype(np.int64)
+    voxel_hash = voxel_indices[:, 0] * 73856093 ^ voxel_indices[:, 1] * 19349663 ^ voxel_indices[:, 2] * 83492791
+    sort_order = np.lexsort((-opacities, voxel_hash))
+    sorted_voxel = voxel_hash[sort_order]
+
+    unique_mask = np.empty(len(sort_order), dtype=bool)
+    unique_mask[0] = True
+    unique_mask[1:] = sorted_voxel[1:] != sorted_voxel[:-1]
+    selected = sort_order[unique_mask]
+
+    if len(selected) > max_splats:
+        selected = selected[np.argsort(-opacities[selected])[:max_splats]]
+    elif len(selected) < max_splats:
+        remaining = sort_order[~unique_mask]
+        needed = max_splats - len(selected)
+        remaining_top = remaining[np.argsort(-opacities[remaining])[:needed]]
+        selected = np.concatenate([selected, remaining_top])
+
+    indices = np.sort(selected)
+    subsampled = arr[indices]
+
+    new_header = header.replace(
+        b'element vertex ' + str(vertex_count).encode(),
+        b'element vertex ' + str(max_splats).encode()
+    )
+
+    with open(out_path, 'wb') as f:
+        f.write(new_header)
+        f.write(subsampled.tobytes())
+        f.write(extra_data)
+
+    return max_splats
+
+in_dir = sys.argv[1]
+out_dir = sys.argv[2]
+files = sys.argv[3:]
+for i, fname in enumerate(files):
+    # Write with 4-digit zero-padded name (matches JS expectations)
+    out_name = 'frame_' + str(i).zfill(4) + '.ply'
+    n = subsample_ply(in_dir + '/' + fname, out_dir + '/' + out_name, ${MAX_SPLATS})
+    if (i+1) % 10 == 0:
+        print(f'  Subsampled {i+1}/{len(files)} ({n} splats)', flush=True)
+print(f'Done: {len(files)} frames subsampled to <= ${MAX_SPLATS} splats', flush=True)
+`);
+
+  console.log(`Subsampling ${plyFiles.length} PLY files to ${MAX_SPLATS} splats each...`);
+  try {
+    const { execSync } = await import("node:child_process");
+    execSync(
+      `"${pythonPath}" "${subsampleScript}" "${gaussiansDir}" "${framesDir}" ${plyFiles.join(" ")}`,
+      { stdio: "inherit", timeout: 120000 }
     );
+  } catch (err) {
+    console.error("Subsampling failed, copying full-res PLYs instead:", err);
+    for (let i = 0; i < plyFiles.length; i++) {
+      copyFileSync(
+        path.join(gaussiansDir, plyFiles[i]),
+        path.join(framesDir, `frame_${String(i).padStart(4, "0")}.ply`)
+      );
+    }
   }
 
   // Find and copy the source video for native 24fps playback
@@ -350,7 +511,7 @@ export const startVideoPlayer = async () => {
   console.log(`Output dir: ${outputDir}`);
   console.log(`Max frames: ${maxFrames ?? "all"}`);
 
-  const { viewerDir, frameCount } = prepareViewer(outputDir, maxFrames);
+  const { viewerDir, frameCount } = await prepareViewer(outputDir, maxFrames);
   console.log(`Prepared ${frameCount} frames in ${viewerDir}`);
 
   const port = 9123;
