@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-Splatline Video Splat Viewer — Play 3D video frames in the Splatline editor.
+Splatline Video Splat Viewer — Smooth 3D video playback in the Splatline editor.
 
-Uses the Splatline editor (powered by PlayCanvas) with its built-in timeline
-panel for PLY sequence playback. All editor features work: selection, cutting
-planes, splat deletion, transform tools, export, etc.
+Uses the Splatline editor (PlayCanvas engine) with its built-in:
+  - High-quality Gaussian splat renderer (same as the editor)
+  - PLY sequence timeline with play/pause/loop/scrub
+  - In-place splat data swapping for smooth frame transitions
+  - Selection, cutting planes, transform tools, export, etc.
 
-Shows full resolution — no subsampling.
+Adds:
+  - 2D source video side-by-side with 3D
+  - Auto-play with loop on load
+  - FPS matching to source video
+  - Pre-converted PLYs (stripped of extra elements) for fast loading
 
 Usage:
   python run_video_splat.py [output_dir] [max_frames]
@@ -89,14 +95,46 @@ def find_or_build_editor():
     return None
 
 
-# JavaScript injected into index.html to load PLY frames as a sequence
+def find_source_video():
+    """Find the source video file."""
+    downloads = Path("/Users/jaskiratsingh/Downloads")
+    videos = sorted(downloads.glob("grok-video-*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return videos[0] if videos else None
+
+
+# JavaScript injected into index.html:
+# 1. Loads all PLY frames as a sequence (triggers editor's timeline)
+# 2. Sets FPS and enables auto-play with loop
+# 3. Adds 2D video panel side-by-side
+# 4. Syncs 2D frame with 3D timeline frame
 SEQUENCE_LOADER_JS = """
+<style>
+#splatline-2d-panel {
+  position: fixed; top: 0; right: 0; width: 300px; height: calc(100% - 80px);
+  background: #111; border-left: 1px solid #333; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+}
+#splatline-2d-panel img { max-width: 100%; max-height: 100%; object-fit: contain; }
+#splatline-2d-panel .label { position: absolute; top: 8px; left: 10px; color: #666; font-size: 11px; font-family: sans-serif; }
+#splatline-2d-panel.hidden { display: none; }
+</style>
+<div id="splatline-2d-panel" class="hidden">
+  <div class="label">2D Source</div>
+  <img id="splatline-2d-img" />
+</div>
 <script>
-// Splatline video sequence loader — full resolution
 (async function() {
     const manifest = await fetch('manifest.json').then(r => r.json());
-    console.log('Splatline: Loading ' + manifest.frames + ' frames as PLY sequence (full resolution)');
+    console.log('Splatline: Loading ' + manifest.frames + ' frames, fps=' + manifest.fps + ', has2d=' + manifest.has2d);
 
+    // Show 2D panel if we have 2D frames
+    const panel2d = document.getElementById('splatline-2d-panel');
+    const img2d = document.getElementById('splatline-2d-img');
+    if (manifest.has2d) {
+        panel2d.classList.remove('hidden');
+    }
+
+    // Fetch all PLY files as File objects
     const files = [];
     for (let i = 0; i < manifest.frames; i++) {
         const filename = 'frame_' + String(i).padStart(4, '0') + '.ply';
@@ -113,10 +151,31 @@ SEQUENCE_LOADER_JS = """
 
     console.log('Splatline: Importing ' + files.length + ' frames as sequence');
 
+    // Wait for editor to be ready, then import as sequence
     function tryImport(retries) {
         if (window.__splatlineEvents) {
-            window.__splatlineEvents.invoke('import', files).then(() => {
-                console.log('Splatline: Sequence loaded successfully');
+            const ev = window.__splatlineEvents;
+            ev.invoke('import', files).then(() => {
+                console.log('Splatline: Sequence loaded, configuring playback');
+
+                // Set frame rate to match source video
+                ev.fire('timeline.setFrameRate', manifest.fps);
+                // Enable loop (should be default but make sure)
+                ev.fire('timeline.setLoop', true);
+
+                // Sync 2D frame with 3D timeline
+                ev.on('timeline.frame', (frame) => {
+                    if (manifest.has2d) {
+                        img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
+                    }
+                });
+
+                // Auto-play after a short delay (let first frame render)
+                setTimeout(() => {
+                    console.log('Splatline: Starting auto-play');
+                    ev.fire('timeline.setPlaying', true);
+                }, 1500);
+
             }).catch(err => {
                 console.error('Splatline: Import failed:', err);
             });
@@ -134,9 +193,11 @@ SEQUENCE_LOADER_JS = """
 
 def main():
     output_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("output_grok_3d")
-    max_frames = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    max_frames = int(sys.argv[2]) if len(sys.argv) > 2 and int(sys.argv[2]) > 0 else None
 
     gaussians_dir = output_dir / "gaussians"
+    frames_2d_dir = output_dir / "frames"
+
     if not gaussians_dir.exists():
         print(f"Error: No gaussians directory at {gaussians_dir}")
         print("Run run_video_3d.py first to generate PLY files.")
@@ -150,23 +211,27 @@ def main():
     if max_frames:
         ply_files = ply_files[:max_frames]
 
-    # Get FPS
+    # Check for 2D frames
+    has_2d = frames_2d_dir.exists() and any(frames_2d_dir.glob("*.png"))
+
+    # Get FPS from source video
     import cv2
+    source_video = find_source_video()
     fps = 8.0
-    for p in [Path("/Users/jaskiratsingh/Downloads/grok-video-a1a6d6a4-6f94-41c2-82b5-83ec305487ae.mp4")]:
-        if p.exists():
-            cap = cv2.VideoCapture(str(p))
-            source_fps = cap.get(cv2.CAP_PROP_FPS)
-            cap.release()
-            fps = source_fps / 3
-            break
+    if source_video:
+        cap = cv2.VideoCapture(str(source_video))
+        source_fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        fps = source_fps / 3  # frame_skip=3
 
     print("=" * 60)
-    print("SPLATLINE VIDEO SPLAT VIEWER — FULL RESOLUTION")
+    print("SPLATLINE VIDEO PLAYER — EDITOR + 2D")
     print("=" * 60)
-    print(f"Output dir: {output_dir}")
-    print(f"PLY files:  {len(ply_files)}")
-    print(f"FPS:        {fps:.1f}")
+    print(f"Output dir:  {output_dir}")
+    print(f"PLY files:   {len(ply_files)}")
+    print(f"FPS:         {fps:.1f}")
+    print(f"2D video:    {'yes' if has_2d else 'no'}")
+    print(f"Duration:    {len(ply_files)/fps:.1f}s")
     print()
 
     # Find or build editor
@@ -178,16 +243,18 @@ def main():
     # Patch the editor HTML
     index_html = (editor_dist / "index.html").read_text()
     patched = index_html.replace("navigator.serviceWorker", "null && navigator.serviceWorker")
-    patched = patched.replace("<title>SuperSplat</title>", "<title>Splatline Video Viewer</title>")
-    # Inject our sequence loader before the closing body tag
+    patched = patched.replace("<title>SuperSplat</title>", "<title>Splatline Video Player</title>")
+    # Inject our sequence loader + 2D panel before closing body
     patched = patched.replace("</body>", SEQUENCE_LOADER_JS + "\n</body>")
     (editor_dist / "index.html").write_text(patched)
 
-    # Create frames directory in dist
+    # Create frames directory in dist and convert PLYs
     frames_dir = editor_dist / "frames"
     frames_dir.mkdir(exist_ok=True)
+    # Clean old frames
+    for old in frames_dir.glob("*.ply"):
+        old.unlink()
 
-    # Convert PLYs — FULL RESOLUTION, no subsampling
     print(f"Converting {len(ply_files)} PLY files — full resolution...")
     for i, ply_path in enumerate(ply_files):
         std_path = frames_dir / f"frame_{i:04d}.ply"
@@ -195,10 +262,28 @@ def main():
         size_mb = std_path.stat().st_size / 1e6
         print(f"  [{i+1}/{len(ply_files)}] {ply_path.name} -> {size_mb:.1f} MB")
 
+    # Convert 2D frames to JPEG for fast loading
+    if has_2d:
+        video_2d_dir = editor_dist / "video2d"
+        video_2d_dir.mkdir(exist_ok=True)
+        for old in video_2d_dir.glob("*.jpg"):
+            old.unlink()
+        print("Converting 2D frames to JPEG...")
+        for i in range(len(ply_files)):
+            src = frames_2d_dir / f"frame_{i:06d}.png"
+            if not src.exists():
+                continue
+            dst = video_2d_dir / f"frame_{i:04d}.jpg"
+            img = cv2.imread(str(src))
+            if img is not None:
+                cv2.imwrite(str(dst), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        print(f"  Done ({len(list(video_2d_dir.glob('*.jpg')))} frames)")
+
     # Write manifest
     manifest = {
         "frames": len(ply_files),
         "fps": round(fps, 1),
+        "has2d": has_2d,
         "source": str(output_dir),
     }
     (editor_dist / "manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -207,7 +292,7 @@ def main():
     subprocess.run("lsof -ti:3000 | xargs kill -9", shell=True, capture_output=True)
     time.sleep(1)
 
-    # Start the serve dev server
+    # Start the serve dev server (proper MIME types for ES modules)
     print("Starting Splatline editor server...")
     serve_proc = subprocess.Popen(
         ["npx", "serve", str(editor_dist), "-C", "-l", "3000"],
@@ -221,17 +306,27 @@ def main():
     print()
     print(f"Editor: http://localhost:3000")
     print()
-    print("The editor will load all frames as a PLY sequence.")
-    print("Use the timeline panel at the bottom to play/scrub through frames.")
+    print("The editor loads all frames as a PLY sequence with:")
+    print("  - Built-in timeline (play/pause/scrub at bottom)")
+    print("  - Auto-play with loop enabled")
+    print("  - 2D source video panel on the right")
+    print("  - FPS matched to source video")
     print()
-    print("Editor features:")
+    print("Editor features (all work during playback):")
     print("  Selection, cutting planes, splat deletion")
     print("  Transform tools, export, multi-splat")
-    print("  Timeline: play/pause, scrub, frame-rate control")
     print()
-    print("Opening editor... (Ctrl+C to stop)")
+    print("Controls:")
+    print("  Space:     Play/Pause")
+    print("  ←/→:       Prev/Next frame")
+    print("  L:         Toggle loop (in editor settings)")
+    print("  Left drag:  Orbit camera")
+    print("  Right drag: Pan camera")
+    print("  Scroll:    Zoom")
+    print("  F:         Frame scene")
+    print()
+    print("Opening player... (Ctrl+C to stop)")
 
-    # Open browser at root URL
     webbrowser.open(f"http://localhost:3000/")
 
     try:
