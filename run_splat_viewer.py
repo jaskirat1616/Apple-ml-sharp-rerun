@@ -7,7 +7,8 @@ github.com/playcanvas/supersplat) from a local web server with your PLY file
 auto-loaded. You get every feature: selection, cutting planes, splat deletion,
 transform tools, export, etc.
 
-Automatically converts SHARP PLY files to standard 3DGS format.
+Automatically converts SHARP PLY files to standard 3DGS format and subsamples
+for fast browser loading.
 
 Usage:
   python run_splat_viewer.py <ply_file>
@@ -15,51 +16,53 @@ Usage:
 """
 import sys
 import shutil
-import http.server
-import socketserver
-import threading
-import webbrowser
-import time
 import subprocess
+import time
+import webbrowser
 from pathlib import Path
 
+import numpy as np
 
-def convert_to_standard_ply(input_path, output_path):
-    """Convert SHARP PLY to standard 3DGS PLY (strip extra elements)."""
+
+def convert_and_subsample_ply(input_path, output_path, max_splats=500000):
+    """Convert SHARP PLY to standard 3DGS PLY, stripping extra elements
+    and subsampling to max_splats for fast browser loading."""
     from plyfile import PlyData, PlyElement
 
     ply = PlyData.read(str(input_path))
-
-    if len(ply.elements) == 1:
-        shutil.copy2(input_path, output_path)
-        print(f"  PLY already standard ({ply.elements[0].count:,} verts)")
-        return
-
     vertex = ply['vertex']
-    new_vertex = PlyElement.describe(vertex.data, 'vertex')
+    data = vertex.data
+
+    if len(data) > max_splats and 'opacity' in data.dtype.names:
+        opacities = data['opacity']
+        ops = 1.0 / (1.0 + np.exp(-opacities))
+        top_idx = np.argsort(ops)[-max_splats:]
+        data = data[top_idx]
+        print(f"  Subsampled: {vertex.count:,} -> {len(data):,} splats (top opacity)")
+    else:
+        print(f"  Kept all {len(data):,} splats")
+
+    if len(ply.elements) > 1:
+        print(f"  Stripped {len(ply.elements)-1} extra elements")
+
+    new_vertex = PlyElement.describe(data, 'vertex')
     new_ply = PlyData([new_vertex], text=False, byte_order='<')
     new_ply.write(str(output_path))
-    print(f"  Converted: {vertex.count:,} verts, stripped {len(ply.elements)-1} extra elements")
 
 
 def find_or_build_editor():
     """Find or build the Splatline editor dist files."""
-    # Already built?
     dist_dir = Path("/tmp/supersplat/dist")
     if (dist_dir / "index.html").exists() and (dist_dir / "index.js").exists():
         return dist_dir
 
-    # Clone and build
     print("Cloning Splatline editor source...")
     repo_dir = Path("/tmp/supersplat")
     if not repo_dir.exists():
-        result = subprocess.run(
+        subprocess.run(
             ["git", "clone", "--depth", "1", "https://github.com/playcanvas/supersplat.git", str(repo_dir)],
             capture_output=True, text=True, timeout=120
         )
-        if result.returncode != 0:
-            print(f"Clone failed: {result.stderr}")
-            return None
 
     print("Installing dependencies...")
     subprocess.run(["npm", "install"], cwd=str(repo_dir),
@@ -93,76 +96,42 @@ def main():
     editor_dist = find_or_build_editor()
     if not editor_dist:
         print("Error: Could not build Splatline editor")
-        print("Try: cd /tmp/supersplat && npm install && npm run build")
         sys.exit(1)
 
-    # Fresh viewer directory — copy entire editor dist
-    viewer_dir = Path("/tmp/splatline_splat_viewer")
-    if viewer_dir.exists():
-        shutil.rmtree(viewer_dir)
-    viewer_dir.mkdir(parents=True, exist_ok=True)
+    # Patch the editor HTML: disable service worker, rename title
+    index_html = (editor_dist / "index.html").read_text()
+    patched = index_html.replace("navigator.serviceWorker", "null && navigator.serviceWorker")
+    patched = patched.replace("<title>SuperSplat</title>", "<title>Splatline</title>")
+    (editor_dist / "index.html").write_text(patched)
 
-    print("Copying Splatline editor...")
-    shutil.copytree(editor_dist, viewer_dir, dirs_exist_ok=True)
-
-    # Disable service worker — it caches old content and causes black screens
-    # Also rename the page title to Splatline
-    index_html = (viewer_dir / "index.html").read_text()
-    index_html = index_html.replace(
-        "navigator.serviceWorker",
-        "null && navigator.serviceWorker"
-    )
-    index_html = index_html.replace("<title>SuperSplat</title>", "<title>Splatline</title>")
-    (viewer_dir / "index.html").write_text(index_html)
-
-    # Convert PLY to standard format
+    # Convert and subsample PLY into the dist folder
     print(f"Converting PLY ({ply_path.stat().st_size / 1e6:.1f} MB)...")
-    ply_copy = viewer_dir / "scene.ply"
-    convert_to_standard_ply(ply_path, ply_copy)
+    ply_copy = editor_dist / "scene.ply"
+    convert_and_subsample_ply(ply_path, ply_copy)
+    print(f"  Output: {ply_copy.stat().st_size / 1e6:.1f} MB")
 
-    # Web server with correct MIME types
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(viewer_dir), **kwargs)
+    # Kill any existing serve process on port 3000
+    subprocess.run(["lsof", "-ti:3000"], capture_output=True, text=True)
+    subprocess.run("lsof -ti:3000 | xargs kill -9", shell=True, capture_output=True)
+    time.sleep(1)
 
-        def end_headers(self):
-            if self.path.endswith('.js'):
-                self.send_header('Content-Type', 'text/javascript')
-            elif self.path.endswith('.css'):
-                self.send_header('Content-Type', 'text/css')
-            elif self.path.endswith('.json'):
-                self.send_header('Content-Type', 'application/json')
-            elif self.path.endswith('.ply'):
-                self.send_header('Content-Type', 'application/octet-stream')
-            elif self.path.endswith('.wasm'):
-                self.send_header('Content-Type', 'application/wasm')
-            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
-            super().end_headers()
+    # Start the serve dev server (proper MIME types, CORS, no redirects on root)
+    print("Starting Splatline editor server...")
+    serve_proc = subprocess.Popen(
+        ["npx", "serve", str(editor_dist), "-C", "-l", "3000"],
+        cwd=str(editor_dist.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
-        def log_message(self, format, *args):
-            pass
-
-    # Find available port
-    server = None
-    PORT = 8765
-    for port in range(8765, 8780):
-        try:
-            socketserver.TCPServer.allow_reuse_address = True
-            server = socketserver.ThreadingTCPServer(("localhost", port), Handler)
-            PORT = port
-            break
-        except OSError:
-            continue
-
-    if server is None:
-        print("Error: No available port (8765-8779 all in use)")
-        sys.exit(1)
+    # Wait for server to start
+    time.sleep(3)
 
     print("=" * 60)
     print("SPLATLINE SPLAT VIEWER")
     print("=" * 60)
     print(f"PLY file: {ply_path.name}")
-    print(f"Editor:   http://localhost:{PORT}")
+    print(f"Editor:   http://localhost:3000")
     print()
     print("Features: selection, cutting planes, splat deletion,")
     print("          transform tools, export, multi-splat, etc.")
@@ -177,19 +146,15 @@ def main():
     print()
     print("Opening editor... (Ctrl+C to stop)")
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-
-    time.sleep(1)
-    # Auto-load the PLY via URL param
-    webbrowser.open(f"http://localhost:{PORT}/index.html?load=scene.ply&filename={ply_path.name}")
+    # Open browser — use root URL (not /index.html which redirects and loses query params)
+    webbrowser.open(f"http://localhost:3000/?load=scene.ply&filename={ply_path.name}")
 
     try:
-        while True:
-            time.sleep(1)
+        serve_proc.wait()
     except KeyboardInterrupt:
         print("\nShutting down...")
-        server.shutdown()
+        serve_proc.terminate()
+        serve_proc.wait()
         print("Done.")
 
 

@@ -19,12 +19,10 @@ Usage:
 import sys
 import shutil
 import json
-import http.server
-import socketserver
-import threading
-import webbrowser
-import time
 import subprocess
+import time
+import webbrowser
+import re
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +37,6 @@ def convert_and_subsample_ply(input_path, output_path, max_splats=200000):
     vertex = ply['vertex']
     data = vertex.data
 
-    # Subsample by opacity — keep the most visible splats
     if len(data) > max_splats and 'opacity' in data.dtype.names:
         opacities = data['opacity']
         ops = 1.0 / (1.0 + np.exp(-opacities))
@@ -83,32 +80,26 @@ def find_or_build_editor():
 SEQUENCE_LOADER_JS = """
 <script>
 // Splatline video sequence loader
-// Fetches all PLY frames and imports them as a sequence into the editor
 (async function() {
     const manifest = await fetch('manifest.json').then(r => r.json());
     console.log('Splatline: Loading ' + manifest.frames + ' frames as PLY sequence');
 
-    // Fetch all PLY files as File objects
     const files = [];
     for (let i = 0; i < manifest.frames; i++) {
         const filename = 'frame_' + String(i).padStart(4, '0') + '.ply';
         const url = 'frames/' + filename;
         console.log('Splatline: Fetching ' + filename + '...');
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.error('Splatline: Failed to load ' + filename + ': ' + response.status);
-            continue;
-        }
-        const blob = await response.blob();
-        const file = new File([blob], filename, { type: 'application/octet-stream' });
-        files.push({ filename: filename, contents: file });
+        try {
+            const response = await fetch(url);
+            if (!response.ok) { console.error('Splatline: Failed ' + filename); continue; }
+            const blob = await response.blob();
+            const file = new File([blob], filename, { type: 'application/octet-stream' });
+            files.push({ filename: filename, contents: file });
+        } catch(e) { console.error('Splatline: Error fetching ' + filename, e); }
     }
 
     console.log('Splatline: Importing ' + files.length + ' frames as sequence');
 
-    // Wait for the editor to be ready, then import as a sequence
-    // The editor's 'import' event detects PLY sequences by filename pattern
-    // (frame_0000.ply, frame_0001.ply, etc.) and shows the timeline
     function tryImport(retries) {
         if (window.__splatlineEvents) {
             window.__splatlineEvents.invoke('import', files).then(() => {
@@ -119,10 +110,10 @@ SEQUENCE_LOADER_JS = """
         } else if (retries > 0) {
             setTimeout(() => tryImport(retries - 1), 500);
         } else {
-            console.error('Splatline: Editor events not available');
+            console.error('Splatline: Editor events not available after 20 retries');
         }
     }
-    tryImport(20);
+    tryImport(30);
 })();
 </script>
 """
@@ -148,18 +139,14 @@ def main():
 
     # Get FPS
     import cv2
-    video_path = None
+    fps = 8.0
     for p in [Path("/Users/jaskiratsingh/Downloads/grok-video-a1a6d6a4-6f94-41c2-82b5-83ec305487ae.mp4")]:
         if p.exists():
-            video_path = p
+            cap = cv2.VideoCapture(str(p))
+            source_fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+            fps = source_fps / 3
             break
-
-    fps = 8.0
-    if video_path:
-        cap = cv2.VideoCapture(str(video_path))
-        source_fps = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
-        fps = source_fps / 3  # frame_skip=3
 
     print("=" * 60)
     print("SPLATLINE VIDEO SPLAT VIEWER")
@@ -175,50 +162,37 @@ def main():
         print("Error: Could not build Splatline editor")
         sys.exit(1)
 
-    # Fresh viewer directory
-    viewer_dir = Path("/tmp/splatline_video_viewer")
-    if viewer_dir.exists():
-        shutil.rmtree(viewer_dir, ignore_errors=True)
-    viewer_dir.mkdir(parents=True, exist_ok=True)
-
-    print("Copying Splatline editor...")
-    shutil.copytree(editor_dist, viewer_dir, dirs_exist_ok=True)
-
-    # Modify index.html: disable service worker, rename title, inject sequence loader
-    index_html = (viewer_dir / "index.html").read_text()
-    index_html = index_html.replace("navigator.serviceWorker", "null && navigator.serviceWorker")
-    index_html = index_html.replace("<title>SuperSplat</title>", "<title>Splatline Video Viewer</title>")
+    # Patch the editor HTML
+    index_html = (editor_dist / "index.html").read_text()
+    patched = index_html.replace("navigator.serviceWorker", "null && navigator.serviceWorker")
+    patched = patched.replace("<title>SuperSplat</title>", "<title>Splatline Video Viewer</title>")
     # Inject our sequence loader before the closing body tag
-    index_html = index_html.replace("</body>", SEQUENCE_LOADER_JS + "\n</body>")
-    (viewer_dir / "index.html").write_text(index_html)
+    patched = patched.replace("</body>", SEQUENCE_LOADER_JS + "\n</body>")
+    (editor_dist / "index.html").write_text(patched)
 
-    # Also patch the editor JS to expose events globally so our injected
-    # script can call editor.import() to load the PLY sequence
-    editor_js = (viewer_dir / "index.js").read_text()
-    # The minified JS creates events like: const events=new RR
-    # Expose it on window so our sequence loader can use it
-    import re
-    # Match: const events=new <Something>
+    # Patch the editor JS to expose events globally
+    editor_js = (editor_dist / "index.js").read_text()
     match = re.search(r'const events=new (\w+)', editor_js)
     if match:
         old = match.group(0)
         new = f"window.__splatlineEvents={old};const events=window.__splatlineEvents"
         editor_js = editor_js.replace(old, new, 1)
-        print(f"  Patched editor JS: exposed events object")
+        print("  Patched editor JS: exposed events object")
     else:
-        # Fallback: try without 'const'
         match2 = re.search(r'events=new (\w+)', editor_js)
         if match2:
             old = match2.group(0)
             editor_js = editor_js.replace(old, f"window.__splatlineEvents={old};events=window.__splatlineEvents", 1)
-            print(f"  Patched editor JS (fallback): exposed events object")
+            print("  Patched editor JS (fallback): exposed events object")
         else:
             print("  WARNING: Could not find events object in editor JS")
-    (viewer_dir / "index.js").write_text(editor_js)
+    (editor_dist / "index.js").write_text(editor_js)
+
+    # Create frames directory in dist
+    frames_dir = editor_dist / "frames"
+    frames_dir.mkdir(exist_ok=True)
 
     # Convert and subsample PLYs
-    frames_dir = viewer_dir / "frames"
-    frames_dir.mkdir()
     print(f"Converting {len(ply_files)} PLY files (subsampled to 200K splats each)...")
     for i, ply_path in enumerate(ply_files):
         std_path = frames_dir / f"frame_{i:04d}.ply"
@@ -232,48 +206,25 @@ def main():
         "fps": round(fps, 1),
         "source": str(output_dir),
     }
-    (viewer_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    (editor_dist / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    # Web server
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(viewer_dir), **kwargs)
+    # Kill any existing serve process on port 3000
+    subprocess.run("lsof -ti:3000 | xargs kill -9", shell=True, capture_output=True)
+    time.sleep(1)
 
-        def end_headers(self):
-            if self.path.endswith('.js'):
-                self.send_header('Content-Type', 'text/javascript')
-            elif self.path.endswith('.css'):
-                self.send_header('Content-Type', 'text/css')
-            elif self.path.endswith('.json'):
-                self.send_header('Content-Type', 'application/json')
-            elif self.path.endswith('.ply'):
-                self.send_header('Content-Type', 'application/octet-stream')
-            elif self.path.endswith('.wasm'):
-                self.send_header('Content-Type', 'application/wasm')
-            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
-            super().end_headers()
+    # Start the serve dev server
+    print("Starting Splatline editor server...")
+    serve_proc = subprocess.Popen(
+        ["npx", "serve", str(editor_dist), "-C", "-l", "3000"],
+        cwd=str(editor_dist.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
-        def log_message(self, format, *args):
-            pass
-
-    # Use port 9000+ to avoid stale service worker from previous editor
-    server = None
-    PORT = 9000
-    for port in range(9000, 9020):
-        try:
-            socketserver.TCPServer.allow_reuse_address = True
-            server = socketserver.ThreadingTCPServer(("localhost", port), Handler)
-            PORT = port
-            break
-        except OSError:
-            continue
-
-    if server is None:
-        print("Error: No available port")
-        sys.exit(1)
+    time.sleep(3)
 
     print()
-    print(f"Editor: http://localhost:{PORT}")
+    print(f"Editor: http://localhost:3000")
     print()
     print("The editor will load all frames as a PLY sequence.")
     print("Use the timeline panel at the bottom to play/scrub through frames.")
@@ -283,26 +234,17 @@ def main():
     print("  Transform tools, export, multi-splat")
     print("  Timeline: play/pause, scrub, frame-rate control")
     print()
-    print("Controls:")
-    print("  Left drag:    Orbit")
-    print("  Right drag:   Pan")
-    print("  Scroll:       Zoom")
-    print("  F:            Frame scene")
-    print()
     print("Opening editor... (Ctrl+C to stop)")
 
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-
-    time.sleep(1)
-    webbrowser.open(f"http://localhost:{PORT}/index.html")
+    # Open browser at root URL (not /index.html which redirects)
+    webbrowser.open(f"http://localhost:3000/")
 
     try:
-        while True:
-            time.sleep(1)
+        serve_proc.wait()
     except KeyboardInterrupt:
         print("\nShutting down...")
-        server.shutdown()
+        serve_proc.terminate()
+        serve_proc.wait()
         print("Done.")
 
 
