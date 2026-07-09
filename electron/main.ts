@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
+const isVideoMode = process.env.SPLATLINE_VIDEO === "1";
 const backendPort = Number(process.env.SPLATLINE_BACKEND_PORT ?? 8787);
 const backendHost = "127.0.0.1";
 const backendUrl = `http://${backendHost}:${backendPort}`;
@@ -112,6 +113,13 @@ const createWindow = async () => {
 };
 
 app.whenReady().then(async () => {
+  if (isVideoMode) {
+    // Video player mode — load the video entry point
+    const { startVideoPlayer } = await import("./video-main.js");
+    await startVideoPlayer();
+    return;
+  }
+
   ipcMain.handle("backend:status", backendStatus);
   ipcMain.handle("backend:start", startBackend);
   ipcMain.handle("backend:stop", stopBackend);
@@ -130,6 +138,9 @@ app.on("window-all-closed", () => {
   if (backendProcess) {
     backendProcess.kill();
     backendProcess = null;
+  }
+  if (isVideoMode) {
+    import("./video-main.js").then(({ stopVideoPlayer }) => stopVideoPlayer());
   }
   if (process.platform !== "darwin") {
     app.quit();
