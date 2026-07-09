@@ -1,80 +1,235 @@
-# Splat Models
+# Splat Reconstruction Backends
 
-Splatline v2 has a pluggable backend registry for splat reconstruction models. On first run, the backend selector prompts you to choose between **SHARP** (non-commercial research) and **TripoSplat** (MIT, fully open). The selection persists across sessions in `~/.splatline/config.json`.
-
-The v1 default is Apple SHARP because it directly matches the Splatline contract: per-frame 3D Gaussian `.ply` output, OpenCV-style camera coordinates, and metric scale from a single image. For commercial use, select **TripoSplat** instead.
-
-## Backend Registry
-
-| Backend | License | Commercial OK | Status | Venue | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `sharp` | apple-amlr (non-commercial) | No | default (research) | — | Per-frame 3DGS from a single image. Non-commercial research only. |
-| `triposplat` | MIT | Yes | available | SIGGRAPH 2026 | Fully open single-image 3DGS with learned density control. |
-| `longsplat` | NVlabs (check terms) | Check | tracked | ICCV 2025 | Video-native temporal coherence — one coherent 3DGS scene from the whole video instead of independent per-frame splats. |
-| `splinegs` | MIT | Yes | tracked | CVPR 2025 | Dynamic monocular Gaussian splatting. |
-| `depthsplat` | MIT | Yes | tracked | CVPR 2025 | Multi-view depth plus Gaussian splatting; can save `.ply`. |
-| `vggt` | Custom (commercial checkpoint available) | Apply | tracked | CVPR 2025 Best Paper | Feed-forward geometry foundation for camera, depth, point maps, and tracks. |
-| `noposplat` | — | — | research reference | — | Real-time Gaussian reconstruction from sparse unposed views. |
-| `anysplat` | — | — | research reference | — | Unconstrained image collections with Gaussian, depth, and camera heads. |
-| `volsplat` | — | — | research reference | — | Voxel-aligned Gaussian prediction for adaptive scene complexity. |
-
-> **Commercial use:** pick a backend with `commercial_ok = Yes` (e.g. `triposplat`). SHARP is research-only. See [NOTICE.md](../NOTICE.md) for the full license breakdown.
-
-## Current Default
-
-`sharp` (research) / `triposplat` (commercial)
-
-- Source: Apple `ml-sharp` / VAST-AI-Research `TripoSplat`
-- Input: one image, or extracted video frames processed one at a time
-- Output: 3DGS `.ply`
-- Coordinates: OpenCV convention, X right, Y down, Z forward
-- Device support: CPU, CUDA, and MPS for prediction
-- SHARP default checkpoint: `https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt`
+Splatline v2 supports five 3D reconstruction backends, swappable with `--splat-backend <name>`. Each has different requirements, licenses, and hardware needs.
 
 ```bash
-# SHARP (non-commercial research, default)
-python scripts/sports/analyze_athlete_twin.py training.mp4 \
-  --splat-backend sharp \
-  --device mps \
-  --sharp-internal-size 1536 \
-  --pose-model yolo26x-pose.pt
+python run_video_3d.py --video video.mp4 --splat-backend <name>
 ```
 
-Use the MIT-licensed TripoSplat backend (commercial-safe):
+## Quick Reference
+
+| Backend | License | Hardware | Feed-forward | Install Difficulty |
+|---------|---------|----------|-------------|-------------------|
+| **sharp** | Non-commercial | CPU / MPS / CUDA | Yes | `pip install sharp` |
+| **triposplat** | MIT | CPU / MPS / CUDA | Yes | Clone + pip install |
+| **vggt** | MIT code / CC-BY-NC checkpoint | MPS / CUDA | Yes | `pip install vggt` |
+| **depthsplat** | MIT | MPS / CUDA | Yes | Clone + pip install |
+| **longsplat** | NVlabs | CUDA only | No (training) | Complex (CUDA submodules) |
+
+---
+
+## SHARP (default)
+
+Apple's monocular 3DGS model. Fast, feed-forward, works from a single image. Non-commercial research only.
+
+- **Repo:** https://github.com/apple/ml-sharp
+- **Model:** Auto-downloads (~2.5GB) from `https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt`
+- **Device:** CPU, MPS (Apple Silicon), CUDA
+- **License:** Apple AMLR — non-commercial research only
+
+### Install
 
 ```bash
-python scripts/sports/analyze_athlete_twin.py training.mp4 \
-  --splat-backend triposplat \
-  --device mps
+pip install sharp
 ```
 
-Use a local SHARP checkpoint:
+That's it. The model weights download automatically on first run.
+
+### Run
 
 ```bash
-python scripts/sports/analyze_athlete_twin.py training.mp4 \
-  --splat-backend sharp \
-  --sharp-checkpoint /path/to/sharp_2572gikvuh.pt
+python run_video_3d.py --video video.mp4 --splat-backend sharp
+python run_video_3d.py --video video.mp4 --splat-backend sharp --device mps
 ```
 
-Use a different SHARP-compatible checkpoint URL:
+### Use a local checkpoint
 
 ```bash
-python scripts/sports/analyze_athlete_twin.py training.mp4 \
-  --splat-backend sharp \
-  --sharp-model-url https://example.com/custom_sharp.pt
+python run_video_3d.py --video video.mp4 --splat-backend sharp --device mps
+# Or set the checkpoint in code via load_sharp_predictor(checkpoint_path=...)
 ```
 
-## Tracked Research Backends
+---
 
-The registry also tracks research references that are not drop-in Splatline backends yet. The [Backend Registry](#backend-registry) table above lists them with their license and status; adapters can be added cleanly as each project stabilizes.
+## TripoSplat
 
-## Why SHARP Stays Default (Research)
+MIT-licensed single-image 3DGS. Commercial-safe alternative to SHARP. SIGGRAPH 2026.
 
-For sports-science analysis, Splatline needs reliable per-frame splats that can be aligned with pose detections immediately. SHARP is still the best research default for that exact workflow because it works from ordinary monocular frames and writes standard PLY files. Multi-view methods may become better for longer clips, but they need additional work to preserve frame timing, camera alignment, and export compatibility.
+- **Repo:** https://github.com/VAST-AI-Research/TripoSplat
+- **Model:** Auto-downloads from HuggingFace (`VAST-AI-Research/TripoSplat`)
+- **Device:** CPU, MPS, CUDA
+- **License:** MIT — commercial OK
 
-For commercial deployments, use **TripoSplat** — it is MIT-licensed and produces the same per-frame 3DGS `.ply` output without the non-commercial restriction.
+### Install
 
-## Next Backend Adapter Target
+```bash
+git clone https://github.com/VAST-AI-Research/TripoSplat.git
+cd TripoSplat
+pip install -e .
+```
 
-The most useful next adapter is probably **DepthSplat** for multi-frame clips where several nearby frames can be grouped into a stronger reconstruction. It already exposes saved Gaussian `.ply` output in its project workflow, but it expects a separate CUDA research environment, so it should be integrated as an optional external backend rather than a required dependency.
+### Run
 
+```bash
+python run_video_3d.py --video video.mp4 --splat-backend triposplat
+```
+
+---
+
+## VGGT
+
+CVPR 2025 Best Paper. Feed-forward geometry foundation model — camera poses + dense depth + point cloud in under 1 second. Replaces COLMAP entirely.
+
+- **Repo:** https://github.com/facebookresearch/vggt
+- **Model:** Auto-downloads from HuggingFace (`facebook/VGGT-1B`, ~1GB)
+- **Device:** MPS (Apple Silicon), CUDA. CPU works but is slow.
+- **License:** MIT code, CC-BY-NC model checkpoint (non-commercial)
+
+### Install
+
+```bash
+pip install vggt
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/facebookresearch/vggt.git
+cd vggt
+pip install -e .
+```
+
+### Run
+
+```bash
+python run_video_3d.py --video video.mp4 --splat-backend vggt
+python run_video_3d.py --video video.mp4 --splat-backend vggt --device mps
+```
+
+### How it works in Splatline
+
+VGGT processes frames in chunks of 50 (configurable). For each chunk:
+1. Forward pass → camera poses, depth maps, 3D world points
+2. Points filtered by confidence score (>1.5 default)
+3. Global point cloud deduplicated via voxel grid
+4. Per-frame PLY written by projecting global cloud into each camera view
+
+The output is per-frame 3DGS PLY files with positions, colors, and default Gaussian parameters (scale, rotation, opacity).
+
+---
+
+## DepthSplat
+
+CVPR 2025. Multi-view depth-conditioned Gaussian splatting. Uses 2+ context views for geometrically consistent 3DGS (not single-image like SHARP).
+
+- **Repo:** https://github.com/cvg/depthsplat
+- **Model:** Auto-downloads from HuggingFace (`haofeixu/depthsplat`)
+  - `small` (37M params, fast)
+  - `base` (117M params, recommended)
+  - `large` (360M params, best quality)
+- **Device:** MPS (Apple Silicon), CUDA
+- **License:** MIT — commercial OK
+
+### Install
+
+```bash
+git clone https://github.com/cvg/depthsplat.git
+cd depthsplat
+pip install -r requirements.txt
+```
+
+### Run
+
+```bash
+python run_video_3d.py --video video.mp4 --splat-backend depthsplat
+python run_video_3d.py --video video.mp4 --splat-backend depthsplat --device mps
+```
+
+### How it works in Splatline
+
+DepthSplat selects overlapping keyframe groups from the video (every 5th frame by default, with 2 context views per group). Each group is reconstructed independently, producing per-keyframe PLY files. The keyframe interval and number of context views are configurable in `utils/backends/depthsplat_backend.py`.
+
+---
+
+## LongSplat
+
+ICCV 2025. Video-native coherent 3DGS — produces a **single coherent scene** from the entire video using MASt3R pose estimation and temporal consistency losses. This is the only backend that solves flickering between frames.
+
+- **Repo:** https://github.com/NVlabs/LongSplat
+- **Model:** Trains from scratch per video (no pre-trained checkpoint)
+- **Device:** **CUDA only** (uses `diff-gaussian-rasterization` which is CUDA-only). Does NOT work on MPS or CPU.
+- **License:** NVlabs — check terms before commercial use
+- **Type:** Training-based (optimizes per video, slower but temporally coherent)
+
+### Install
+
+```bash
+git clone --recursive https://github.com/NVlabs/LongSplat.git
+cd LongSplat
+conda create -n longsplat python=3.10.13 cmake=3.14.0 -y
+conda activate longsplat
+conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+pip install -r requirements.txt
+pip install submodules/simple-knn
+pip install submodules/diff-gaussian-rasterization
+pip install submodules/fused-ssim
+```
+
+### Run
+
+```bash
+# Set the LongSplat directory
+export LONGSPLAT_DIR=~/LongSplat
+
+# Run (CUDA required)
+python run_video_3d.py --video video.mp4 --splat-backend longsplat --device cuda
+```
+
+Or pass the directory in code via `LongSplatBackend(longsplat_dir=...)`.
+
+### How it works in Splatline
+
+LongSplat is a training pipeline, not a feed-forward model. Splatline runs it via subprocess:
+1. Frames are subsampled to ~10fps and resized to 512px width
+2. LongSplat trains for 3000 iterations (configurable) with temporal consistency losses
+3. The custom format is converted to standard 3DGS PLY via `convert_3dgs.py`
+4. Per-frame symlinks are created pointing to the single coherent scene PLY
+
+The result is a single coherent 3DGS scene — no flickering between frames. All downstream viewers (Rerun, Electron, web) work unchanged because the output is per-frame PLY files.
+
+### Requirements
+
+- **NVIDIA GPU with CUDA** — LongSplat uses CUDA-only rasterization submodules. It will not work on Apple Silicon (MPS) or CPU.
+- ~8GB+ GPU memory for 512px frames
+- Training takes minutes to hours depending on video length and iteration count
+
+---
+
+## Comparison
+
+| Feature | SHARP | TripoSplat | VGGT | DepthSplat | LongSplat |
+|---------|-------|-----------|------|-----------|-----------|
+| Temporal coherence | No | No | Partial | Partial | **Yes** |
+| Camera poses | No | No | **Yes** | No | Yes (MASt3R) |
+| Dense depth | No | No | **Yes** | Yes | No |
+| Multi-view | No | No | Yes | **Yes** | Yes (full video) |
+| Feed-forward | Yes | Yes | Yes | Yes | No (training) |
+| MPS support | Yes | Yes | Yes | Yes | **No** |
+| CUDA required | No | No | No | No | **Yes** |
+| Commercial OK | No | **Yes** | No (checkpoint) | **Yes** | Check |
+
+## Choosing a Backend
+
+- **Quick results on Mac:** SHARP (default, fast, non-commercial) or TripoSplat (MIT, commercial-safe)
+- **Better geometry:** VGGT (camera poses + depth, replaces COLMAP) or DepthSplat (multi-view consistency)
+- **No flickering:** LongSplat (single coherent scene, but requires NVIDIA GPU and training time)
+- **Commercial use:** TripoSplat or DepthSplat (both MIT)
+
+## Future Backends
+
+Tracked but not yet implemented:
+
+- **SplineGS** (CVPR 2025) — dynamic monocular Gaussian splatting. https://github.com/KAIST-VICLab/SplineGS
+- **NoPoSplat** (ICLR 2025) — pose-free sparse view reconstruction. https://noposplat.github.io/
+- **AnySplat** (SIGGRAPH Asia 2025) — unconstrained image collections. https://github.com/InternRobotics/AnySplat
+- **VolSplat** (ECCV 2026) — voxel-aligned Gaussian prediction. https://github.com/ziplab/VolSplat
