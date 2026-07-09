@@ -110,15 +110,15 @@ def find_source_video():
 SEQUENCE_LOADER_JS = """
 <style>
 #splatline-2d-panel {
-  position: fixed; top: 10px; left: 10px; width: 200px; height: 280px;
+  position: fixed; bottom: 80px; left: 10px; width: 240px; height: 180px;
   background: rgba(17,17,17,0.9); border: 1px solid #333; border-radius: 6px;
   z-index: 5000; display: flex; align-items: center; justify-content: center;
   overflow: hidden; pointer-events: none;
 }
-#splatline-2d-panel img { max-width: 100%; max-height: 100%; object-fit: contain; }
+#splatline-2d-panel video { width: 100%; height: 100%; object-fit: contain; }
 #splatline-2d-panel .label {
   position: absolute; top: 4px; left: 8px; color: #888; font-size: 10px;
-  font-family: sans-serif; text-shadow: 0 1px 2px #000;
+  font-family: sans-serif; text-shadow: 0 1px 2px #000; z-index: 1;
 }
 #splatline-2d-panel.hidden { display: none; }
 #splatline-loading {
@@ -131,7 +131,7 @@ SEQUENCE_LOADER_JS = """
 </style>
 <div id="splatline-2d-panel" class="hidden">
   <div class="label">2D Source</div>
-  <img id="splatline-2d-img" />
+  <video id="splatline-2d-video" muted loop playsinline></video>
 </div>
 <div id="splatline-loading">
   <div>Loading 3D frames...</div>
@@ -143,10 +143,13 @@ SEQUENCE_LOADER_JS = """
     console.log('Splatline: Loading ' + manifest.frames + ' frames, fps=' + manifest.fps + ', has2d=' + manifest.has2d);
 
     const panel2d = document.getElementById('splatline-2d-panel');
-    const img2d = document.getElementById('splatline-2d-img');
+    const video2d = document.getElementById('splatline-2d-video');
     const loadingEl = document.getElementById('splatline-loading');
     const loadFill = document.getElementById('splatline-load-fill');
-    if (manifest.has2d) panel2d.classList.remove('hidden');
+    if (manifest.has2d && manifest.videoSrc) {
+        video2d.src = manifest.videoSrc;
+        panel2d.classList.remove('hidden');
+    }
 
     // Build URLs for on-demand fetching — avoids OOM with large sequences
     // (81 frames x 66MB = 5.3GB if loaded as File objects at once)
@@ -169,9 +172,13 @@ SEQUENCE_LOADER_JS = """
             ev.fire('timeline.frame', 0);
             ev.fire('timeline.setFrameRate', manifest.fps);
             ev.fire('timeline.setLoop', true);
+
+            // Sync 2D video to 3D timeline — video plays at native 24fps
+            // while 3D splats update at 8fps (every 3rd frame).
             ev.on('timeline.frame', (frame) => {
-                if (manifest.has2d) {
-                    img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
+                if (manifest.has2d && video2d) {
+                    const t = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
+                    video2d.currentTime = t;
                 }
             });
 
@@ -287,28 +294,27 @@ def main():
         size_mb = std_path.stat().st_size / 1e6
         print(f"  [{i+1}/{len(ply_files)}] {ply_path.name} -> {size_mb:.1f} MB")
 
-    # Convert 2D frames to JPEG for fast loading
-    if has_2d:
-        video_2d_dir = editor_dist / "video2d"
-        video_2d_dir.mkdir(exist_ok=True)
-        for old in video_2d_dir.glob("*.jpg"):
-            old.unlink()
-        print("Converting 2D frames to JPEG...")
-        for i in range(len(ply_files)):
-            src = frames_2d_dir / f"frame_{i:06d}.png"
-            if not src.exists():
-                continue
-            dst = video_2d_dir / f"frame_{i:04d}.jpg"
-            img = cv2.imread(str(src))
-            if img is not None:
-                cv2.imwrite(str(dst), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        print(f"  Done ({len(list(video_2d_dir.glob('*.jpg')))} frames)")
+    # Copy source video for native 24fps playback
+    video_src = None
+    source_fps = 24.0
+    frame_skip = 3
+    downloads_dir = Path("/Users/jaskiratsingh/Downloads")
+    if downloads_dir.exists():
+        grok_videos = sorted(downloads_dir.glob("grok-video-*.mp4"))
+        if grok_videos:
+            video_dst = editor_dist / "source.mp4"
+            print(f"Copying source video: {grok_videos[0].name}")
+            shutil.copy2(grok_videos[0], video_dst)
+            video_src = "source.mp4"
 
     # Write manifest
     manifest = {
         "frames": len(ply_files),
-        "fps": round(fps, 1),
-        "has2d": has_2d,
+        "fps": round(source_fps / frame_skip, 1),
+        "has2d": bool(video_src),
+        "videoSrc": video_src,
+        "sourceFps": source_fps,
+        "frameSkip": frame_skip,
         "source": str(output_dir),
     }
     (editor_dist / "manifest.json").write_text(json.dumps(manifest, indent=2))

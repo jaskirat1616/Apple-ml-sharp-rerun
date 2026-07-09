@@ -81,15 +81,15 @@ const startStaticServer = (rootDir: string, port: number): Promise<void> => {
 const SEQUENCE_LOADER_JS = `
 <style>
 #splatline-2d-panel {
-  position: fixed; top: 10px; left: 10px; width: 200px; height: 280px;
+  position: fixed; bottom: 80px; left: 10px; width: 240px; height: 180px;
   background: rgba(17,17,17,0.9); border: 1px solid #333; border-radius: 6px;
   z-index: 5000; display: flex; align-items: center; justify-content: center;
   overflow: hidden; pointer-events: none;
 }
-#splatline-2d-panel img { max-width: 100%; max-height: 100%; object-fit: contain; }
+#splatline-2d-panel video { width: 100%; height: 100%; object-fit: contain; }
 #splatline-2d-panel .label {
   position: absolute; top: 4px; left: 8px; color: #888; font-size: 10px;
-  font-family: sans-serif; text-shadow: 0 1px 2px #000;
+  font-family: sans-serif; text-shadow: 0 1px 2px #000; z-index: 1;
 }
 #splatline-2d-panel.hidden { display: none; }
 #splatline-loading {
@@ -102,7 +102,7 @@ const SEQUENCE_LOADER_JS = `
 </style>
 <div id="splatline-2d-panel" class="hidden">
   <div class="label">2D Source</div>
-  <img id="splatline-2d-img" />
+  <video id="splatline-2d-video" muted loop playsinline></video>
 </div>
 <div id="splatline-loading">
   <div>Loading 3D frames...</div>
@@ -114,10 +114,13 @@ const SEQUENCE_LOADER_JS = `
     console.log('Splatline: Loading ' + manifest.frames + ' frames, fps=' + manifest.fps + ', has2d=' + manifest.has2d);
 
     const panel2d = document.getElementById('splatline-2d-panel');
-    const img2d = document.getElementById('splatline-2d-img');
+    const video2d = document.getElementById('splatline-2d-video');
     const loadingEl = document.getElementById('splatline-loading');
     const loadFill = document.getElementById('splatline-load-fill');
-    if (manifest.has2d) panel2d.classList.remove('hidden');
+    if (manifest.has2d && manifest.videoSrc) {
+        video2d.src = manifest.videoSrc;
+        panel2d.classList.remove('hidden');
+    }
 
     // Build URLs and names for on-demand fetching (avoids OOM — no need to
     // load all 81 PLY files as File objects in JS heap at once)
@@ -140,9 +143,14 @@ const SEQUENCE_LOADER_JS = `
             ev.fire('timeline.frame', 0);
             ev.fire('timeline.setFrameRate', manifest.fps);
             ev.fire('timeline.setLoop', true);
+
+            // Sync 2D video to 3D timeline — video plays at native 24fps
+            // while 3D splats update at 8fps (every 3rd frame).
+            // We seek the video to match the current 3D frame.
             ev.on('timeline.frame', (frame) => {
-                if (manifest.has2d) {
-                    img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
+                if (manifest.has2d && video2d) {
+                    const t = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
+                    video2d.currentTime = t;
                 }
             });
 
@@ -250,27 +258,25 @@ const prepareViewer = (outputDir: string, maxFrames: number | null) => {
     );
   }
 
-  // Convert 2D frames to JPEG
-  if (has2d) {
-    const video2dDir = path.join(viewerDir, "video2d");
-    mkdirSync(video2dDir, { recursive: true });
-    pythonProcess = spawn(getPythonPath(), [
-      "-c",
-      `import cv2, sys, os
-src_dir = sys.argv[1]
-dst_dir = sys.argv[2]
-count = int(sys.argv[3])
-for i in range(count):
-    src = os.path.join(src_dir, f"frame_{i:06d}.png")
-    if not os.path.exists(src):
-        continue
-    dst = os.path.join(dst_dir, f"frame_{i:04d}.jpg")
-    img = cv2.imread(src)
-    if img is not None:
-        cv2.imwrite(dst, img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-`,
-      frames2dDir, video2dDir, String(plyFiles.length),
-    ], { stdio: ["ignore", "pipe", "pipe"] });
+  // Find and copy the source video for native 24fps playback
+  let videoSrc: string | null = null;
+  const sourceFps = 24.0;
+  const frameSkip = 3;
+  const downloadsDir = "/Users/jaskiratsingh/Downloads";
+  if (existsSync(downloadsDir)) {
+    const grokVideos = readdirSync(downloadsDir)
+      .filter((f) => f.startsWith("grok-video-") && f.endsWith(".mp4"))
+      .sort();
+    if (grokVideos.length > 0) {
+      const videoDst = path.join(viewerDir, "source.mp4");
+      try {
+        copyFileSync(path.join(downloadsDir, grokVideos[0]), videoDst);
+        videoSrc = "source.mp4";
+        console.log(`Copied source video: ${grokVideos[0]}`);
+      } catch (e) {
+        console.error("Failed to copy source video:", e);
+      }
+    }
   }
 
   // Patch editor HTML
@@ -280,10 +286,18 @@ for i in range(count):
   html = html.replace("</body>", SEQUENCE_LOADER_JS + "\n</body>");
   writeFileSync(path.join(viewerDir, "index.html"), html);
 
-  // Write manifest
+  // Write manifest with video metadata for native fps playback
   writeFileSync(
     path.join(viewerDir, "manifest.json"),
-    JSON.stringify({ frames: plyFiles.length, fps: 8.0, has2d, source: outputDir }, null, 2)
+    JSON.stringify({
+      frames: plyFiles.length,
+      fps: sourceFps / frameSkip,
+      has2d: !!videoSrc,
+      videoSrc,
+      sourceFps,
+      frameSkip,
+      source: outputDir,
+    }, null, 2)
   );
 
   return { viewerDir, frameCount: plyFiles.length };
