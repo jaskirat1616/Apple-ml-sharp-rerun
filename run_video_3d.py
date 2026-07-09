@@ -361,39 +361,86 @@ def _densify_point_cloud(positions, colors, tree, nn_dist):
 
 
 def main():
-    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Splatline: Convert a video to 3D and view in Rerun.",
+        usage="python run_video_3d.py [mode] [--video PATH] [--output-dir DIR] [options]",
+    )
+    parser.add_argument("mode", nargs="?", default="points",
+                        choices=["points", "solid"],
+                        help="Viewer mode: 'points' (point cloud) or 'solid' (dense mesh). Default: points")
+    parser.add_argument("--video", "-v", type=str, default=None,
+                        help="Path to input video file. Required for first run.")
+    parser.add_argument("--output-dir", "-o", type=str, default=None,
+                        help="Output directory. Default: output_<video_name>")
+    parser.add_argument("--frame-skip", type=int, default=3,
+                        help="Extract every Nth frame (default: 3, i.e. 24fps -> 8fps)")
+    parser.add_argument("--splat-backend", "-b", type=str, default="sharp",
+                        choices=["sharp", "triposplat", "vggt", "depthsplat", "longsplat"],
+                        help="3D reconstruction backend (default: sharp)")
+    parser.add_argument("--device", type=str, default="default",
+                        choices=["default", "cuda", "mps", "cpu"],
+                        help="Compute device (default: auto-detect)")
+    parser.add_argument("--internal-size", type=int, default=1536,
+                        help="SHARP inference resolution (default: 1536)")
+    args = parser.parse_args()
+
+    # Resolve video path
+    video_path = Path(args.video) if args.video else VIDEO_PATH
+    if not video_path.exists():
+        print(f"Error: video not found: {video_path}")
+        print("Usage: python run_video_3d.py --video /path/to/video.mp4")
+        sys.exit(1)
+
+    # Resolve output dir
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = Path(f"output_{video_path.stem}")
 
     print("=" * 60)
     print("SPLATLINE VIDEO-TO-3D PIPELINE")
     print("=" * 60)
-    print(f"Input: {VIDEO_PATH}")
-    print(f"Output: {OUTPUT_DIR}")
+    print(f"Input:   {video_path}")
+    print(f"Output:  {output_dir}")
+    print(f"Backend: {args.splat_backend}")
+    print(f"Device:  {args.device}")
 
-    frames_dir = OUTPUT_DIR / "frames"
-    gaussians_dir = OUTPUT_DIR / "gaussians"
+    frames_dir = output_dir / "frames"
+    gaussians_dir = output_dir / "gaussians"
 
     # Step 1: Extract frames (skip if already done)
     if not frames_dir.exists() or not list(frames_dir.glob("*.png")):
-        frames_dir, fps = extract_frames(VIDEO_PATH, OUTPUT_DIR, FRAME_SKIP)
+        frames_dir, fps = extract_frames(video_path, output_dir, args.frame_skip)
     else:
-        import cv2
-        cap = cv2.VideoCapture(str(VIDEO_PATH))
+        cap = cv2.VideoCapture(str(video_path))
         source_fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
-        fps = source_fps / FRAME_SKIP
+        fps = source_fps / args.frame_skip
         print(f"Frames already extracted ({len(list(frames_dir.glob('*.png')))} frames)")
 
-    # Step 2: Convert to 3D with SHARP (skip if already done)
+    # Save video path for the Electron player to find
+    video_source_file = output_dir / "video_source.txt"
+    if not video_source_file.exists():
+        video_source_file.write_text(str(video_path))
+
+    # Step 2: Convert to 3D (skip if already done)
     if not gaussians_dir.exists() or not list(gaussians_dir.glob("*.ply")):
-        gaussians_dir = convert_with_sharp(frames_dir, OUTPUT_DIR, device="mps")
+        from utils.splat_models import convert_frames_to_splats
+        gaussians_dir = convert_frames_to_splats(
+            frames_dir=frames_dir,
+            output_dir=output_dir,
+            backend=args.splat_backend,
+            device=args.device,
+            internal_size=args.internal_size,
+            video_path=video_path,
+        )
     else:
         print(f"PLY files already exist ({len(list(gaussians_dir.glob('*.ply')))} files)")
 
     # Step 3: View in Rerun
-    # Choose viewer mode: "points" (original) or "solid" (dense, gap-filled)
-    mode = sys.argv[1] if len(sys.argv) > 1 else "points"
-
-    if mode == "solid":
+    if args.mode == "solid":
         print("\nMode: SOLID SPLAT (dense, gap-filled)")
         view_solid_in_rerun(gaussians_dir, frames_dir, fps)
     else:

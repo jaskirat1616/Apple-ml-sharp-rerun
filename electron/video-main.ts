@@ -425,40 +425,40 @@ print(f'Done: {len(files)} frames subsampled to <= ${MAX_SPLATS} splats', flush=
   }
 
   // Find and copy the source video for native 24fps playback
-  // Read the correct video path from run_video_3d.py
   let videoSrc: string | null = null;
   const sourceFps = 24.0;
   const frameSkip = 3;
 
-  // Try to read VIDEO_PATH from run_video_3d.py
-  const video3dPath = path.join(outputDir, "..", "run_video_3d.py");
   let sourceVideoPath: string | null = null;
-  if (existsSync(video3dPath)) {
-    const content = readFileSync(video3dPath, "utf8");
-    const match = content.match(/VIDEO_PATH\s*=\s*Path\(["']([^"']+)["']\)/);
-    if (match) {
-      sourceVideoPath = match[1];
+
+  // Priority 1: video_source.txt (written by run_video_3d.py with --video)
+  const metaPath = path.join(outputDir, "video_source.txt");
+  if (existsSync(metaPath)) {
+    sourceVideoPath = readFileSync(metaPath, "utf8").trim();
+  }
+
+  // Priority 2: VIDEO_PATH from run_video_3d.py (legacy fallback)
+  if (!sourceVideoPath) {
+    const video3dPath = path.join(outputDir, "..", "run_video_3d.py");
+    if (existsSync(video3dPath)) {
+      const content = readFileSync(video3dPath, "utf8");
+      const match = content.match(/VIDEO_PATH\s*=\s*Path\(["']([^"']+)["']\)/);
+      if (match) {
+        sourceVideoPath = match[1];
+      }
     }
   }
 
-  // Fallback: check for a metadata file in the output dir
+  // Priority 3: most recent video in Downloads (last resort)
   if (!sourceVideoPath) {
-    const metaPath = path.join(outputDir, "video_source.txt");
-    if (existsSync(metaPath)) {
-      sourceVideoPath = readFileSync(metaPath, "utf8").trim();
-    }
-  }
-
-  // Fallback: use the most recently modified grok-video in Downloads
-  if (!sourceVideoPath) {
-    const downloadsDir = "/Users/jaskiratsingh/Downloads";
+    const downloadsDir = path.join(os.homedir(), "Downloads");
     if (existsSync(downloadsDir)) {
-      const grokVideos = readdirSync(downloadsDir)
-        .filter((f) => f.startsWith("grok-video-") && f.endsWith(".mp4"))
+      const videos = readdirSync(downloadsDir)
+        .filter((f) => f.endsWith(".mp4") || f.endsWith(".mov") || f.endsWith(".avi"))
         .map((f) => ({ name: f, path: path.join(downloadsDir, f), mtime: statSync(path.join(downloadsDir, f)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime);
-      if (grokVideos.length > 0) {
-        sourceVideoPath = grokVideos[0].path;
+      if (videos.length > 0) {
+        sourceVideoPath = videos[0].path;
       }
     }
   }
