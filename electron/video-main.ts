@@ -136,7 +136,6 @@ const SEQUENCE_LOADER_JS = `
         if (window.__splatlineEvents) {
             const ev = window.__splatlineEvents;
             // Use sequence.setPlyUrls — fetches PLYs on-demand from server
-            // instead of loading all into memory as File objects
             ev.fire('sequence.setPlyUrls', { urls: urls, names: names });
             ev.fire('timeline.frame', 0);
             ev.fire('timeline.setFrameRate', manifest.fps);
@@ -146,22 +145,35 @@ const SEQUENCE_LOADER_JS = `
                     img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
                 }
             });
-            // Wait for first few frames to preload, then start playing
-            let waitCount = 0;
-            function waitForPreload() {
-                waitCount++;
-                loadFill.style.width = (10 + Math.min(80, waitCount * 8)) + '%';
+
+            // Track real preload progress from the editor
+            let started = false;
+            ev.on('sequence.preloadProgress', (data) => {
+                const pct = Math.round((data.loaded / data.total) * 100);
+                loadFill.style.width = pct + '%';
                 loadingEl.querySelector('div').textContent =
-                    'Preloading 3D frames... (' + Math.min(80, waitCount * 8) + '%)';
-                if (waitCount >= 6) {
+                    'Preloading 3D frames... ' + data.loaded + '/' + data.total;
+            });
+
+            // Start playing as soon as first 3 frames are ready
+            ev.on('sequence.preloadReady', () => {
+                if (!started) {
+                    started = true;
                     loadingEl.style.display = 'none';
-                    console.log('Splatline: Starting auto-play with loop');
+                    console.log('Splatline: First frames ready, starting playback');
                     ev.fire('timeline.setPlaying', true);
-                } else {
-                    setTimeout(waitForPreload, 1000);
                 }
-            }
-            waitForPreload();
+            });
+
+            // Safety: if preloadReady doesn't fire within 30s, start anyway
+            setTimeout(() => {
+                if (!started) {
+                    started = true;
+                    loadingEl.style.display = 'none';
+                    console.warn('Splatline: Preload timeout, starting playback anyway');
+                    ev.fire('timeline.setPlaying', true);
+                }
+            }, 30000);
         } else if (retries > 0) {
             setTimeout(() => tryImport(retries - 1), 500);
         } else {
