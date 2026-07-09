@@ -1,0 +1,57 @@
+{
+  "name": "splatline-field-movement-lab",
+  "version": "2.0.0",
+  "description": "Local desktop app for Splatline Field Movement Lab.",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on dist-electron/main.js http://localhost:5173 && electron .\"",
+    "build": "tsc -p tsconfig.electron.json && vite build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "preview": "vite preview",
+    "dist": "npm run build && electron-builder",
+    "video": "tsc -p tsconfig.electron.json && SPLATLINE_VIDEO=1 electron ."
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.0",
+    "electron": "42.0.0",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "com.splatline.field-movement-lab",
+    "productName": "Splatline Field Movement Lab",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "scripts/**/*",
+      "utils/**/*",
+      "ui/**/*",
+      "requirements.txt",
+      "setup.py",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.sports"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Science"
+    }
+  }
+}

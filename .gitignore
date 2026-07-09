@@ -62,6 +62,12 @@ wandb/
 # JSON outputs (often large generated data)
 *.json
 
+# Exception: package.json and tsconfig files are needed for Electron
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.electron.json
+
 # ML / pose weights (downloaded; hundreds of MB)
 *.pt
 *.pth
