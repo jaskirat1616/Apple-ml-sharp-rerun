@@ -144,15 +144,20 @@ const SEQUENCE_LOADER_JS = `
             ev.fire('timeline.setFrameRate', manifest.fps);
             ev.fire('timeline.setLoop', true);
 
-            // Sync 2D video to 3D timeline — video plays at native 24fps
-            // while 3D splats update at 8fps (every 3rd frame).
-            // We seek the video to match the current 3D frame.
-            ev.on('timeline.frame', (frame) => {
-                if (manifest.has2d && video2d) {
-                    const t = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
-                    video2d.currentTime = t;
-                }
-            });
+            // Sync 2D video to 3D timeline — let the video play continuously
+            // at native 24fps for smooth playback. Only re-sync if it drifts
+            // too far from the 3D timeline position.
+            if (manifest.has2d && video2d) {
+                video2d.play().catch(() => {});
+                ev.on('timeline.frame', (frame) => {
+                    if (!video2d) return;
+                    const targetT = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
+                    // Only re-sync if drift > 0.3s (avoids stutter from constant seeking)
+                    if (Math.abs(video2d.currentTime - targetT) > 0.3) {
+                        video2d.currentTime = targetT;
+                    }
+                });
+            }
 
             // Track real preload progress from the editor
             let started = false;
@@ -259,24 +264,55 @@ const prepareViewer = (outputDir: string, maxFrames: number | null) => {
   }
 
   // Find and copy the source video for native 24fps playback
+  // Read the correct video path from run_video_3d.py
   let videoSrc: string | null = null;
   const sourceFps = 24.0;
   const frameSkip = 3;
-  const downloadsDir = "/Users/jaskiratsingh/Downloads";
-  if (existsSync(downloadsDir)) {
-    const grokVideos = readdirSync(downloadsDir)
-      .filter((f) => f.startsWith("grok-video-") && f.endsWith(".mp4"))
-      .sort();
-    if (grokVideos.length > 0) {
-      const videoDst = path.join(viewerDir, "source.mp4");
-      try {
-        copyFileSync(path.join(downloadsDir, grokVideos[0]), videoDst);
-        videoSrc = "source.mp4";
-        console.log(`Copied source video: ${grokVideos[0]}`);
-      } catch (e) {
-        console.error("Failed to copy source video:", e);
+
+  // Try to read VIDEO_PATH from run_video_3d.py
+  const video3dPath = path.join(outputDir, "..", "run_video_3d.py");
+  let sourceVideoPath: string | null = null;
+  if (existsSync(video3dPath)) {
+    const content = readFileSync(video3dPath, "utf8");
+    const match = content.match(/VIDEO_PATH\s*=\s*Path\(["']([^"']+)["']\)/);
+    if (match) {
+      sourceVideoPath = match[1];
+    }
+  }
+
+  // Fallback: check for a metadata file in the output dir
+  if (!sourceVideoPath) {
+    const metaPath = path.join(outputDir, "video_source.txt");
+    if (existsSync(metaPath)) {
+      sourceVideoPath = readFileSync(metaPath, "utf8").trim();
+    }
+  }
+
+  // Fallback: use the most recently modified grok-video in Downloads
+  if (!sourceVideoPath) {
+    const downloadsDir = "/Users/jaskiratsingh/Downloads";
+    if (existsSync(downloadsDir)) {
+      const grokVideos = readdirSync(downloadsDir)
+        .filter((f) => f.startsWith("grok-video-") && f.endsWith(".mp4"))
+        .map((f) => ({ name: f, path: path.join(downloadsDir, f), mtime: statSync(path.join(downloadsDir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (grokVideos.length > 0) {
+        sourceVideoPath = grokVideos[0].path;
       }
     }
+  }
+
+  if (sourceVideoPath && existsSync(sourceVideoPath)) {
+    const videoDst = path.join(viewerDir, "source.mp4");
+    try {
+      copyFileSync(sourceVideoPath, videoDst);
+      videoSrc = "source.mp4";
+      console.log(`Copied source video: ${path.basename(sourceVideoPath)}`);
+    } catch (e) {
+      console.error("Failed to copy source video:", e);
+    }
+  } else {
+    console.warn("No source video found");
   }
 
   // Patch editor HTML

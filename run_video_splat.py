@@ -22,6 +22,7 @@ Usage:
   python run_video_splat.py output_grok_3d 10        # first 10 frames
 """
 import sys
+import re
 import shutil
 import json
 import subprocess
@@ -173,14 +174,18 @@ SEQUENCE_LOADER_JS = """
             ev.fire('timeline.setFrameRate', manifest.fps);
             ev.fire('timeline.setLoop', true);
 
-            // Sync 2D video to 3D timeline — video plays at native 24fps
-            // while 3D splats update at 8fps (every 3rd frame).
-            ev.on('timeline.frame', (frame) => {
-                if (manifest.has2d && video2d) {
-                    const t = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
-                    video2d.currentTime = t;
-                }
-            });
+            // Sync 2D video to 3D timeline — let the video play continuously
+            // at native 24fps for smooth playback. Only re-sync if it drifts.
+            if (manifest.has2d && video2d) {
+                video2d.play().catch(() => {});
+                ev.on('timeline.frame', (frame) => {
+                    if (!video2d) return;
+                    const targetT = frame * (manifest.frameSkip || 3) / (manifest.sourceFps || 24);
+                    if (Math.abs(video2d.currentTime - targetT) > 0.3) {
+                        video2d.currentTime = targetT;
+                    }
+                });
+            }
 
             // Track real preload progress from the editor
             let started = false;
@@ -295,17 +300,41 @@ def main():
         print(f"  [{i+1}/{len(ply_files)}] {ply_path.name} -> {size_mb:.1f} MB")
 
     # Copy source video for native 24fps playback
+    # Read the correct video path from run_video_3d.py
     video_src = None
     source_fps = 24.0
     frame_skip = 3
-    downloads_dir = Path("/Users/jaskiratsingh/Downloads")
-    if downloads_dir.exists():
-        grok_videos = sorted(downloads_dir.glob("grok-video-*.mp4"))
-        if grok_videos:
-            video_dst = editor_dist / "source.mp4"
-            print(f"Copying source video: {grok_videos[0].name}")
-            shutil.copy2(grok_videos[0], video_dst)
-            video_src = "source.mp4"
+
+    source_video_path = None
+    # Try to read VIDEO_PATH from run_video_3d.py
+    video_3d_script = output_dir.parent / "run_video_3d.py"
+    if video_3d_script.exists():
+        content = video_3d_script.read_text()
+        match = re.search(r'VIDEO_PATH\s*=\s*Path\(["\']([^"\']+)["\']\)', content)
+        if match:
+            source_video_path = Path(match.group(1))
+
+    # Fallback: check for a metadata file in the output dir
+    if not source_video_path:
+        meta_path = output_dir / "video_source.txt"
+        if meta_path.exists():
+            source_video_path = Path(meta_path.read_text().strip())
+
+    # Fallback: use the most recently modified grok-video in Downloads
+    if not source_video_path or not source_video_path.exists():
+        downloads_dir = Path("/Users/jaskiratsingh/Downloads")
+        if downloads_dir.exists():
+            grok_videos = sorted(downloads_dir.glob("grok-video-*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if grok_videos:
+                source_video_path = grok_videos[0]
+
+    if source_video_path and source_video_path.exists():
+        video_dst = editor_dist / "source.mp4"
+        print(f"Copying source video: {source_video_path.name}")
+        shutil.copy2(source_video_path, video_dst)
+        video_src = "source.mp4"
+    else:
+        print("Warning: No source video found")
 
     # Write manifest
     manifest = {
