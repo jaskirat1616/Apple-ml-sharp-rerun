@@ -7,8 +7,8 @@ github.com/playcanvas/supersplat) from a local web server with your PLY file
 auto-loaded. You get every feature: selection, cutting planes, splat deletion,
 transform tools, export, etc.
 
-Automatically converts SHARP PLY files to standard 3DGS format and subsamples
-for fast browser loading.
+Automatically converts SHARP PLY files to standard 3DGS format.
+Shows full resolution — no subsampling.
 
 Usage:
   python run_splat_viewer.py <ply_file>
@@ -21,52 +21,67 @@ import time
 import webbrowser
 from pathlib import Path
 
-import numpy as np
 
-
-def convert_and_subsample_ply(input_path, output_path, max_splats=500000):
-    """Convert SHARP PLY to standard 3DGS PLY, stripping extra elements
-    and subsampling to max_splats for fast browser loading."""
+def convert_to_standard_ply(input_path, output_path):
+    """Convert SHARP PLY to standard 3DGS PLY (strip extra elements).
+    Keeps ALL splats — full resolution."""
     from plyfile import PlyData, PlyElement
 
     ply = PlyData.read(str(input_path))
+
+    if len(ply.elements) == 1:
+        shutil.copy2(input_path, output_path)
+        print(f"  PLY already standard ({ply.elements[0].count:,} verts)")
+        return
+
     vertex = ply['vertex']
-    data = vertex.data
-
-    if len(data) > max_splats and 'opacity' in data.dtype.names:
-        opacities = data['opacity']
-        ops = 1.0 / (1.0 + np.exp(-opacities))
-        top_idx = np.argsort(ops)[-max_splats:]
-        data = data[top_idx]
-        print(f"  Subsampled: {vertex.count:,} -> {len(data):,} splats (top opacity)")
-    else:
-        print(f"  Kept all {len(data):,} splats")
-
-    if len(ply.elements) > 1:
-        print(f"  Stripped {len(ply.elements)-1} extra elements")
-
-    new_vertex = PlyElement.describe(data, 'vertex')
+    new_vertex = PlyElement.describe(vertex.data, 'vertex')
     new_ply = PlyData([new_vertex], text=False, byte_order='<')
     new_ply.write(str(output_path))
+    print(f"  Converted: {vertex.count:,} verts, stripped {len(ply.elements)-1} extra elements")
 
 
 def find_or_build_editor():
     """Find or build the Splatline editor dist files."""
     dist_dir = Path("/tmp/supersplat/dist")
     if (dist_dir / "index.html").exists() and (dist_dir / "index.js").exists():
+        # Verify the events patch is present
+        js = (dist_dir / "index.js").read_text()
+        if "__splatlineEvents" not in js:
+            print("Rebuilding editor (events patch missing)...")
+            result = subprocess.run(["npm", "run", "build"], cwd=str(dist_dir.parent),
+                                    capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                print(f"Build failed: {result.stderr[-500:]}")
+                return None
         return dist_dir
 
     print("Cloning Splatline editor source...")
     repo_dir = Path("/tmp/supersplat")
     if not repo_dir.exists():
-        subprocess.run(
+        result = subprocess.run(
             ["git", "clone", "--depth", "1", "https://github.com/playcanvas/supersplat.git", str(repo_dir)],
             capture_output=True, text=True, timeout=120
         )
+        if result.returncode != 0:
+            print(f"Clone failed: {result.stderr}")
+            return None
 
     print("Installing dependencies...")
     subprocess.run(["npm", "install"], cwd=str(repo_dir),
                    capture_output=True, text=True, timeout=120)
+
+    # Patch the source to expose events on window for sequence loading
+    main_ts = repo_dir / "src" / "main.ts"
+    if main_ts.exists():
+        src = main_ts.read_text()
+        if "__splatlineEvents" not in src:
+            src = src.replace(
+                "const events = new Events();",
+                "const events = new Events();\n    (window as any).__splatlineEvents = events;"
+            )
+            main_ts.write_text(src)
+            print("  Patched main.ts: exposed events on window")
 
     print("Building Splatline editor...")
     result = subprocess.run(["npm", "run", "build"], cwd=str(repo_dir),
@@ -104,18 +119,17 @@ def main():
     patched = patched.replace("<title>SuperSplat</title>", "<title>Splatline</title>")
     (editor_dist / "index.html").write_text(patched)
 
-    # Convert and subsample PLY into the dist folder
-    print(f"Converting PLY ({ply_path.stat().st_size / 1e6:.1f} MB)...")
+    # Convert PLY to standard format — FULL RESOLUTION, no subsampling
+    print(f"Converting PLY ({ply_path.stat().st_size / 1e6:.1f} MB) — full resolution...")
     ply_copy = editor_dist / "scene.ply"
-    convert_and_subsample_ply(ply_path, ply_copy)
+    convert_to_standard_ply(ply_path, ply_copy)
     print(f"  Output: {ply_copy.stat().st_size / 1e6:.1f} MB")
 
     # Kill any existing serve process on port 3000
-    subprocess.run(["lsof", "-ti:3000"], capture_output=True, text=True)
     subprocess.run("lsof -ti:3000 | xargs kill -9", shell=True, capture_output=True)
     time.sleep(1)
 
-    # Start the serve dev server (proper MIME types, CORS, no redirects on root)
+    # Start the serve dev server (proper MIME types, CORS)
     print("Starting Splatline editor server...")
     serve_proc = subprocess.Popen(
         ["npx", "serve", str(editor_dist), "-C", "-l", "3000"],
@@ -124,11 +138,10 @@ def main():
         stderr=subprocess.DEVNULL,
     )
 
-    # Wait for server to start
     time.sleep(3)
 
     print("=" * 60)
-    print("SPLATLINE SPLAT VIEWER")
+    print("SPLATLINE SPLAT VIEWER — FULL RESOLUTION")
     print("=" * 60)
     print(f"PLY file: {ply_path.name}")
     print(f"Editor:   http://localhost:3000")
@@ -146,7 +159,7 @@ def main():
     print()
     print("Opening editor... (Ctrl+C to stop)")
 
-    # Open browser — use root URL (not /index.html which redirects and loses query params)
+    # Open browser — use root URL (serve redirects /index.html and loses query params)
     webbrowser.open(f"http://localhost:3000/?load=scene.ply&filename={ply_path.name}")
 
     try:

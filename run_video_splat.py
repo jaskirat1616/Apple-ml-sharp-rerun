@@ -6,8 +6,7 @@ Uses the Splatline editor (powered by PlayCanvas) with its built-in timeline
 panel for PLY sequence playback. All editor features work: selection, cutting
 planes, splat deletion, transform tools, export, etc.
 
-Frames are pre-subsampled for fast loading. The editor detects them as a
-PLY sequence and shows a timeline scrubber at the bottom.
+Shows full resolution — no subsampling.
 
 Usage:
   python run_video_splat.py [output_dir] [max_frames]
@@ -22,28 +21,22 @@ import json
 import subprocess
 import time
 import webbrowser
-import re
 from pathlib import Path
 
-import numpy as np
 
-
-def convert_and_subsample_ply(input_path, output_path, max_splats=200000):
-    """Convert SHARP PLY to standard 3DGS PLY, stripping extra elements
-    and subsampling to max_splats for fast browser loading."""
+def convert_to_standard_ply(input_path, output_path):
+    """Convert SHARP PLY to standard 3DGS PLY (strip extra elements).
+    Keeps ALL splats — full resolution."""
     from plyfile import PlyData, PlyElement
 
     ply = PlyData.read(str(input_path))
+
+    if len(ply.elements) == 1:
+        shutil.copy2(input_path, output_path)
+        return
+
     vertex = ply['vertex']
-    data = vertex.data
-
-    if len(data) > max_splats and 'opacity' in data.dtype.names:
-        opacities = data['opacity']
-        ops = 1.0 / (1.0 + np.exp(-opacities))
-        top_idx = np.argsort(ops)[-max_splats:]
-        data = data[top_idx]
-
-    new_vertex = PlyElement.describe(data, 'vertex')
+    new_vertex = PlyElement.describe(vertex.data, 'vertex')
     new_ply = PlyData([new_vertex], text=False, byte_order='<')
     new_ply.write(str(output_path))
 
@@ -52,6 +45,14 @@ def find_or_build_editor():
     """Find or build the Splatline editor dist files."""
     dist_dir = Path("/tmp/supersplat/dist")
     if (dist_dir / "index.html").exists() and (dist_dir / "index.js").exists():
+        js = (dist_dir / "index.js").read_text()
+        if "__splatlineEvents" not in js:
+            print("Rebuilding editor (events patch missing)...")
+            result = subprocess.run(["npm", "run", "build"], cwd=str(dist_dir.parent),
+                                    capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                print(f"Build failed: {result.stderr[-500:]}")
+                return None
         return dist_dir
 
     print("Cloning Splatline editor source...")
@@ -66,6 +67,18 @@ def find_or_build_editor():
     subprocess.run(["npm", "install"], cwd=str(repo_dir),
                    capture_output=True, text=True, timeout=120)
 
+    # Patch the source to expose events on window for sequence loading
+    main_ts = repo_dir / "src" / "main.ts"
+    if main_ts.exists():
+        src = main_ts.read_text()
+        if "__splatlineEvents" not in src:
+            src = src.replace(
+                "const events = new Events();",
+                "const events = new Events();\n    (window as any).__splatlineEvents = events;"
+            )
+            main_ts.write_text(src)
+            print("  Patched main.ts: exposed events on window")
+
     print("Building Splatline editor...")
     subprocess.run(["npm", "run", "build"], cwd=str(repo_dir),
                    capture_output=True, text=True, timeout=120)
@@ -79,10 +92,10 @@ def find_or_build_editor():
 # JavaScript injected into index.html to load PLY frames as a sequence
 SEQUENCE_LOADER_JS = """
 <script>
-// Splatline video sequence loader
+// Splatline video sequence loader — full resolution
 (async function() {
     const manifest = await fetch('manifest.json').then(r => r.json());
-    console.log('Splatline: Loading ' + manifest.frames + ' frames as PLY sequence');
+    console.log('Splatline: Loading ' + manifest.frames + ' frames as PLY sequence (full resolution)');
 
     const files = [];
     for (let i = 0; i < manifest.frames; i++) {
@@ -110,7 +123,7 @@ SEQUENCE_LOADER_JS = """
         } else if (retries > 0) {
             setTimeout(() => tryImport(retries - 1), 500);
         } else {
-            console.error('Splatline: Editor events not available after 20 retries');
+            console.error('Splatline: Editor events not available after 30 retries');
         }
     }
     tryImport(30);
@@ -149,7 +162,7 @@ def main():
             break
 
     print("=" * 60)
-    print("SPLATLINE VIDEO SPLAT VIEWER")
+    print("SPLATLINE VIDEO SPLAT VIEWER — FULL RESOLUTION")
     print("=" * 60)
     print(f"Output dir: {output_dir}")
     print(f"PLY files:  {len(ply_files)}")
@@ -170,33 +183,15 @@ def main():
     patched = patched.replace("</body>", SEQUENCE_LOADER_JS + "\n</body>")
     (editor_dist / "index.html").write_text(patched)
 
-    # Patch the editor JS to expose events globally
-    editor_js = (editor_dist / "index.js").read_text()
-    match = re.search(r'const events=new (\w+)', editor_js)
-    if match:
-        old = match.group(0)
-        new = f"window.__splatlineEvents={old};const events=window.__splatlineEvents"
-        editor_js = editor_js.replace(old, new, 1)
-        print("  Patched editor JS: exposed events object")
-    else:
-        match2 = re.search(r'events=new (\w+)', editor_js)
-        if match2:
-            old = match2.group(0)
-            editor_js = editor_js.replace(old, f"window.__splatlineEvents={old};events=window.__splatlineEvents", 1)
-            print("  Patched editor JS (fallback): exposed events object")
-        else:
-            print("  WARNING: Could not find events object in editor JS")
-    (editor_dist / "index.js").write_text(editor_js)
-
     # Create frames directory in dist
     frames_dir = editor_dist / "frames"
     frames_dir.mkdir(exist_ok=True)
 
-    # Convert and subsample PLYs
-    print(f"Converting {len(ply_files)} PLY files (subsampled to 200K splats each)...")
+    # Convert PLYs — FULL RESOLUTION, no subsampling
+    print(f"Converting {len(ply_files)} PLY files — full resolution...")
     for i, ply_path in enumerate(ply_files):
         std_path = frames_dir / f"frame_{i:04d}.ply"
-        convert_and_subsample_ply(ply_path, std_path)
+        convert_to_standard_ply(ply_path, std_path)
         size_mb = std_path.stat().st_size / 1e6
         print(f"  [{i+1}/{len(ply_files)}] {ply_path.name} -> {size_mb:.1f} MB")
 
@@ -236,7 +231,7 @@ def main():
     print()
     print("Opening editor... (Ctrl+C to stop)")
 
-    # Open browser at root URL (not /index.html which redirects)
+    # Open browser at root URL
     webbrowser.open(f"http://localhost:3000/")
 
     try:
