@@ -1,5 +1,5 @@
 import { BrowserWindow, shell } from "electron";
-import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync, copyFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync, copyFileSync, readFileSync, statSync, createReadStream } from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import os from "node:os";
@@ -28,6 +28,9 @@ const startStaticServer = (rootDir: string, port: number): Promise<void> => {
       let urlPath = req.url?.split("?")[0] || "/";
       if (urlPath === "/") urlPath = "/index.html";
 
+      // Decode URL path
+      urlPath = decodeURIComponent(urlPath);
+
       const filePath = path.join(rootDir, urlPath);
       if (!filePath.startsWith(rootDir)) {
         res.writeHead(403);
@@ -43,21 +46,35 @@ const startStaticServer = (rootDir: string, port: number): Promise<void> => {
 
       const ext = path.extname(filePath);
       const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-      const data = readFileSync(filePath);
-      res.writeHead(200, {
-        "Content-Type": mimeType,
-        "Content-Length": data.length,
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "Access-Control-Allow-Origin": "*",
-      });
-      res.end(data);
+
+      // Use streaming for large files (PLY files can be 60MB+)
+      // readFileSync blocks the event loop and crashes Electron's network service
+      try {
+        const stat = statSync(filePath);
+        res.writeHead(200, {
+          "Content-Type": mimeType,
+          "Content-Length": stat.size,
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "Access-Control-Allow-Origin": "*",
+        });
+        const stream = createReadStream(filePath);
+        stream.on("error", (err) => {
+          console.error(`Error streaming ${filePath}:`, err);
+          if (!res.writableEnded) res.end();
+        });
+        stream.pipe(res);
+      } catch (err) {
+        console.error(`Error serving ${filePath}:`, err);
+        res.writeHead(500);
+        res.end("Internal error");
+      }
     });
 
+    server.on("error", reject);
     server.listen(port, "127.0.0.1", () => {
       staticServer = server;
       resolve();
     });
-    server.on("error", reject);
   });
 };
 
@@ -102,53 +119,49 @@ const SEQUENCE_LOADER_JS = `
     const loadFill = document.getElementById('splatline-load-fill');
     if (manifest.has2d) panel2d.classList.remove('hidden');
 
-    const files = [];
+    // Build URLs and names for on-demand fetching (avoids OOM — no need to
+    // load all 81 PLY files as File objects in JS heap at once)
+    const urls = [];
+    const names = [];
     for (let i = 0; i < manifest.frames; i++) {
         const filename = 'frame_' + String(i).padStart(4, '0') + '.ply';
-        const url = 'frames/' + filename;
-        try {
-            const response = await fetch(url);
-            if (!response.ok) { console.error('Splatline: Failed ' + filename); continue; }
-            const blob = await response.blob();
-            const file = new File([blob], filename, { type: 'application/octet-stream' });
-            files.push({ filename: filename, contents: file });
-            loadFill.style.width = ((i + 1) / manifest.frames * 50) + '%';
-        } catch(e) { console.error('Splatline: Error fetching ' + filename, e); }
+        urls.push('frames/' + filename);
+        names.push(filename);
     }
+    loadFill.style.width = '10%';
 
-    console.log('Splatline: Importing ' + files.length + ' frames as sequence');
+    console.log('Splatline: Setting URL sequence with ' + urls.length + ' frames');
 
     function tryImport(retries) {
         if (window.__splatlineEvents) {
             const ev = window.__splatlineEvents;
-            ev.invoke('import', files).then(() => {
-                console.log('Splatline: Sequence imported, waiting for preload...');
-                ev.fire('timeline.setFrameRate', manifest.fps);
-                ev.fire('timeline.setLoop', true);
-                ev.on('timeline.frame', (frame) => {
-                    if (manifest.has2d) {
-                        img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
-                    }
-                });
-                let waitCount = 0;
-                function waitForPreload() {
-                    waitCount++;
-                    loadFill.style.width = (50 + Math.min(50, waitCount * 5)) + '%';
-                    loadingEl.querySelector('div').textContent =
-                        'Preloading 3D frames... (' + Math.min(50, waitCount * 5) + '%)';
-                    if (waitCount >= 10) {
-                        loadingEl.style.display = 'none';
-                        console.log('Splatline: Starting smooth auto-play with loop');
-                        ev.fire('timeline.setPlaying', true);
-                    } else {
-                        setTimeout(waitForPreload, 500);
-                    }
+            // Use sequence.setPlyUrls — fetches PLYs on-demand from server
+            // instead of loading all into memory as File objects
+            ev.fire('sequence.setPlyUrls', { urls: urls, names: names });
+            ev.fire('timeline.frame', 0);
+            ev.fire('timeline.setFrameRate', manifest.fps);
+            ev.fire('timeline.setLoop', true);
+            ev.on('timeline.frame', (frame) => {
+                if (manifest.has2d) {
+                    img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
                 }
-                waitForPreload();
-            }).catch(err => {
-                console.error('Splatline: Import failed:', err);
-                loadingEl.style.display = 'none';
             });
+            // Wait for first few frames to preload, then start playing
+            let waitCount = 0;
+            function waitForPreload() {
+                waitCount++;
+                loadFill.style.width = (10 + Math.min(80, waitCount * 8)) + '%';
+                loadingEl.querySelector('div').textContent =
+                    'Preloading 3D frames... (' + Math.min(80, waitCount * 8) + '%)';
+                if (waitCount >= 6) {
+                    loadingEl.style.display = 'none';
+                    console.log('Splatline: Starting auto-play with loop');
+                    ev.fire('timeline.setPlaying', true);
+                } else {
+                    setTimeout(waitForPreload, 1000);
+                }
+            }
+            waitForPreload();
         } else if (retries > 0) {
             setTimeout(() => tryImport(retries - 1), 500);
         } else {
@@ -303,7 +316,23 @@ export const startVideoPlayer = async () => {
     return { action: "deny" };
   });
 
-  await mainWindow.loadURL(`http://127.0.0.1:${port}/`);
+  // Retry loadURL — the network service can fail on first attempt
+  const url = `http://127.0.0.1:${port}/`;
+  let loaded = false;
+  for (let attempt = 0; attempt < 3 && !loaded; attempt++) {
+    try {
+      await mainWindow.loadURL(url);
+      loaded = true;
+    } catch (err) {
+      console.error(`Load attempt ${attempt + 1} failed:`, err);
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+  if (!loaded) {
+    console.error("Failed to load after 3 attempts");
+  }
 };
 
 export const stopVideoPlayer = () => {

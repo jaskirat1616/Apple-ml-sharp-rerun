@@ -148,66 +148,48 @@ SEQUENCE_LOADER_JS = """
     const loadFill = document.getElementById('splatline-load-fill');
     if (manifest.has2d) panel2d.classList.remove('hidden');
 
-    // Fetch all PLY files as File objects — show progress
-    const files = [];
+    // Build URLs for on-demand fetching — avoids OOM with large sequences
+    // (81 frames x 66MB = 5.3GB if loaded as File objects at once)
+    const urls = [];
+    const names = [];
     for (let i = 0; i < manifest.frames; i++) {
         const filename = 'frame_' + String(i).padStart(4, '0') + '.ply';
-        const url = 'frames/' + filename;
-        try {
-            const response = await fetch(url);
-            if (!response.ok) { console.error('Splatline: Failed ' + filename); continue; }
-            const blob = await response.blob();
-            const file = new File([blob], filename, { type: 'application/octet-stream' });
-            files.push({ filename: filename, contents: file });
-            loadFill.style.width = ((i + 1) / manifest.frames * 50) + '%';
-        } catch(e) { console.error('Splatline: Error fetching ' + filename, e); }
+        urls.push('frames/' + filename);
+        names.push(filename);
     }
+    loadFill.style.width = '10%';
 
-    console.log('Splatline: Importing ' + files.length + ' frames as sequence');
+    console.log('Splatline: Setting URL sequence with ' + urls.length + ' frames');
 
     function tryImport(retries) {
         if (window.__splatlineEvents) {
             const ev = window.__splatlineEvents;
-            ev.invoke('import', files).then(() => {
-                console.log('Splatline: Sequence imported, waiting for preload...');
-
-                // Set frame rate + loop
-                ev.fire('timeline.setFrameRate', manifest.fps);
-                ev.fire('timeline.setLoop', true);
-
-                // Sync 2D frame with 3D timeline
-                ev.on('timeline.frame', (frame) => {
-                    if (manifest.has2d) {
-                        img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
-                    }
-                });
-
-                // Wait for frames to be preloaded (the editor preloads in background)
-                // Check every 500ms if the first few frames are ready, then start playing
-                let waitCount = 0;
-                function waitForPreload() {
-                    waitCount++;
-                    loadFill.style.width = (50 + Math.min(50, waitCount * 5)) + '%';
-                    loadingEl.querySelector('div').textContent =
-                        'Preloading 3D frames... (' + Math.min(50, waitCount * 5) + '%)';
-
-                    // After a reasonable wait, start playing.
-                    // The editor caches frames after first load, so the first
-                    // play-through may have minor hitches but loops will be smooth.
-                    if (waitCount >= 10) {
-                        loadingEl.style.display = 'none';
-                        console.log('Splatline: Starting smooth auto-play with loop');
-                        ev.fire('timeline.setPlaying', true);
-                    } else {
-                        setTimeout(waitForPreload, 500);
-                    }
+            // Use sequence.setPlyUrls — fetches PLYs on-demand from server
+            ev.fire('sequence.setPlyUrls', { urls: urls, names: names });
+            ev.fire('timeline.frame', 0);
+            ev.fire('timeline.setFrameRate', manifest.fps);
+            ev.fire('timeline.setLoop', true);
+            ev.on('timeline.frame', (frame) => {
+                if (manifest.has2d) {
+                    img2d.src = 'video2d/frame_' + String(frame).padStart(4, '0') + '.jpg';
                 }
-                waitForPreload();
-
-            }).catch(err => {
-                console.error('Splatline: Import failed:', err);
-                loadingEl.style.display = 'none';
             });
+            // Wait for first few frames to preload, then start playing
+            let waitCount = 0;
+            function waitForPreload() {
+                waitCount++;
+                loadFill.style.width = (10 + Math.min(80, waitCount * 8)) + '%';
+                loadingEl.querySelector('div').textContent =
+                    'Preloading 3D frames... (' + Math.min(80, waitCount * 8) + '%)';
+                if (waitCount >= 6) {
+                    loadingEl.style.display = 'none';
+                    console.log('Splatline: Starting auto-play with loop');
+                    ev.fire('timeline.setPlaying', true);
+                } else {
+                    setTimeout(waitForPreload, 1000);
+                }
+            }
+            waitForPreload();
         } else if (retries > 0) {
             setTimeout(() => tryImport(retries - 1), 500);
         } else {
