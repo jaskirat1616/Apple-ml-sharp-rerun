@@ -110,12 +110,16 @@ def find_source_video():
 SEQUENCE_LOADER_JS = """
 <style>
 #splatline-2d-panel {
-  position: fixed; top: 0; right: 0; width: 300px; height: calc(100% - 80px);
-  background: #111; border-left: 1px solid #333; z-index: 10000;
-  display: flex; align-items: center; justify-content: center;
+  position: fixed; top: 10px; left: 10px; width: 200px; height: 280px;
+  background: rgba(17,17,17,0.9); border: 1px solid #333; border-radius: 6px;
+  z-index: 5000; display: flex; align-items: center; justify-content: center;
+  overflow: hidden; pointer-events: none;
 }
 #splatline-2d-panel img { max-width: 100%; max-height: 100%; object-fit: contain; }
-#splatline-2d-panel .label { position: absolute; top: 8px; left: 10px; color: #666; font-size: 11px; font-family: sans-serif; }
+#splatline-2d-panel .label {
+  position: absolute; top: 4px; left: 8px; color: #888; font-size: 10px;
+  font-family: sans-serif; text-shadow: 0 1px 2px #000;
+}
 #splatline-2d-panel.hidden { display: none; }
 #splatline-loading {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
